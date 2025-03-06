@@ -1,0 +1,95 @@
+{
+    "input": {
+        "client_info": [{
+            "patient": {
+                "patient_name": "",
+                "patient_gender": "",
+                "patient_age": "",
+                "if_child": "",
+                "certificate_type": "",
+                "certificate_number": "",
+                "mobile_number": "",
+                "current_address": {
+                    "province": "",
+                    "city": "",
+                    "district": "",
+                    "street": ""
+                },
+                "detailed_address": ""
+            },
+            "guardian": {
+                "guardian_name": "",
+                "certificate_type": "",
+                "certificate_number": ""
+            }
+        }],
+        "basic_medical_record": {
+            "chief_complaint": "",
+            "history_of_present_illness": "",
+            "past_medical_history": "",
+            "personal_history": "",
+            "allergy_history": "",
+            "physical_examination": "",
+            "auxiliary_examination": ""
+        },
+        "diagnosis": [
+            {
+                "diagnosis_name": "",
+                "diagnosis_name_retrieve": "",
+                "diagnosis_code": "",
+                "diagnosis_identifier": ""
+            }
+        ]
+    },
+    "output": {
+        "examine_content": [
+            {
+                "examine_code": "",
+                "examine_category": "",
+                "examine_name": "",
+                "examine_name_retrieve": "",
+                "order_quantity": "",
+                "examine_result": "",
+                "corresponding_diagnosis": [
+                    {
+                        "diagnosis_name": "",
+                        "diagnosis_name_retrieve": "",
+                        "diagnosis_code": "",
+                        "diagnosis_identifier": ""
+                    }
+                ]
+            }
+        ],
+        "assay_content": [
+            {
+                "assay_code": "",
+                "assay_category": "",
+                "assay_name": "",
+                "assay_name_retrieve": "",
+                "order_quantity": "",
+                "assay_result": [
+                    {
+                        "result_id": "",
+                        "result_item": "",
+                        "result_value": 0.0,
+                        "result_identifier": "",
+                        "reference_value": "",
+                        "unit": ""
+                    }
+                ],
+                "corresponding_diagnosis": [
+                    {
+                        "diagnosis_name": "",
+                        "diagnosis_name_retrieve": "",
+                        "diagnosis_code": "",
+                        "diagnosis_identifier": ""
+                    }
+                ]
+            }
+        ]
+    },
+    "chat": {
+        "historical_conversations_bak": [],
+        "historical_conversations": []
+    }
+}

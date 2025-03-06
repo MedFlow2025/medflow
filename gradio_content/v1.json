@@ -1,0 +1,71 @@
+{
+    "input": {
+        "client_info": [
+            {
+                "patient": {
+                    "patient_name": "",
+                    "patient_gender": "",
+                    "patient_age": "",
+                    "if_child": "",
+                    "certificate_type": "",
+                    "certificate_number": "",
+                    "mobile_number": "",
+                    "current_address": {
+                        "province": "",
+                        "city": "",
+                        "district": "",
+                        "street": ""
+                    },
+                    "detailed_address": ""
+                },
+                "guardian": {
+                    "guardian_name": "",
+                    "certificate_type": "",
+                    "certificate_number": ""
+                }
+            }
+        ]
+    },
+    "output": {
+        "create_file": "",
+        "client_info": [
+            {
+                "patient": {
+                    "patient_name": "",
+                    "patient_gender": "",
+                    "patient_age": "",
+                    "if_child": "",
+                    "certificate_type": "",
+                    "certificate_number": "",
+                    "mobile_number": "",
+                    "current_address": {
+                        "province": "",
+                        "city": "",
+                        "district": "",
+                        "street": ""
+                    },
+                    "detailed_address": ""
+                },
+                "guardian": {
+                    "guardian_name": "",
+                    "certificate_type": "",
+                    "certificate_number": ""
+                }
+            }
+        ]
+    },
+    "chat": {
+        "historical_conversations_bak": [
+            {
+                "role": "assistant",
+                "content": "您好，我是AI导诊助手，将协助您完成预问诊和预约挂号的全过程。请问患者的姓名是什么?"
+            }
+        ],
+        "historical_conversations": [
+            {
+                "role": "assistant",
+                "content": "您好，我是AI导诊助手，将协助您完成预问诊和预约挂号的全过程。请问患者的姓名是什么?"
+            }
+        ]
+    }
+}

@@ -1,0 +1,58 @@
+{
+    "input": {
+        "client_info": [
+            {
+                "patient": {
+                    "patient_name": "",
+                    "patient_gender": "",
+                    "patient_age": "",
+                    "if_child": "",
+                    "certificate_type": "",
+                    "certificate_number": "",
+                    "mobile_number": "",
+                    "current_address": {
+                        "province": "",
+                        "city": "",
+                        "district": "",
+                        "street": ""
+                    },
+                    "detailed_address": ""
+                },
+                "guardian": {
+                    "guardian_name": "",
+                    "certificate_type": "",
+                    "certificate_number": ""
+                }
+            }
+        ],
+        "basic_medical_record": {
+            "chief_complaint": "",
+            "history_of_present_illness": "",
+            "past_medical_history": "",
+            "personal_history": "",
+            "allergy_history": "",
+            "physical_examination": "",
+            "auxiliary_examination": ""
+        },
+        "diagnosis": [
+            {
+                "diagnosis_name": "",
+                "diagnosis_name_retrieve": "",
+                "diagnosis_code": "",
+                "diagnosis_identifier": ""
+            }
+        ]
+    },
+    "output": {
+        "return_visit": {
+            "summary": "",
+            "if_visit": ""
+        }
+    },
+    "chat": {
+        "historical_conversations_bak": [
+        ],
+        "historical_conversations": [
+        ]
+    }
+}

@@ -1,0 +1,52 @@
+{
+    "input": {
+        "client_info": [{
+            "patient": {
+                "patient_name": "张三",
+                "patient_gender": "男",
+                "patient_age": "44",
+                "if_child": "",
+                "certificate_type": "",
+                "certificate_number": "",
+                "mobile_number": "",
+                "current_address": {
+                    "province": "",
+                    "city": "",
+                    "district": "",
+                    "street": ""
+                },
+                "detailed_address": ""
+            },
+            "guardian": {
+                "guardian_name": "",
+                "certificate_type": "",
+                "certificate_number": ""
+            }
+        }]
+    },
+    "output": {
+        "basic_medical_record": {
+            "chief_complaint": "",
+            "history_of_present_illness": "",
+            "past_medical_history": "",
+            "personal_history": "",
+            "allergy_history": "",
+            "physical_examination": "",
+            "auxiliary_examination": ""
+        }
+    },
+    "chat": {
+        "historical_conversations_bak": [
+            {
+                "role": "assistant",
+                "content": "您好，张三！您的就诊档案已经建立成功，欢迎您来我院就诊，期望我们可以帮助到您。请问您有什么症状？"
+            }
+        ],
+        "historical_conversations": [
+            {
+                "role": "assistant",
+                "content": "您好，张三！您的就诊档案已经建立成功，欢迎您来我院就诊，期望我们可以帮助到您。请问您有什么症状？"
+            }
+        ]
+    }
+}
