@@ -124,7 +124,7 @@ pip install -r requirements.txt
 
 **openai服务准备**
 
-您需要事先用[ollama](https://ollama.com/)、[fastchat](https://github.com/lm-sys/FastChat)、[vllm](https://vllm.hyper.ai/docs/)等部署好模型。我们也将陆续开放一些部署文档供参考，见./docs。
+您需要事先用[ollama](https://ollama.com/)、[fastchat](https://github.com/lm-sys/FastChat)、[vllm](https://vllm.hyper.ai/docs/)等部署好模型。我们也将陆续开放一些部署文档供参考，见[部署文档](./docs)。
 
 部署后您将有类似如下URL的openai的服务:
 
@@ -134,7 +134,8 @@ http://<openai ip>:<openai port>/v1
 
 **数据准备（可选）**
 
-我们提供了自定义知识库导入功能，包括诊断、药品、检查单等，具体示例请参考./database 目录，可运行如下脚本。
+我们提供了自定义知识库导入功能，包括诊断、药品、检查单等，具体示例请参考[data](./data)目录，使用方法可以参考[数据准备说明文档](./docs/data_preparation.md)，可运行如下脚本。
+
 ```bash
 python3 create_database.py
 ```
@@ -158,7 +159,7 @@ python3 inference_gradio.py --host <server ip> --port <server port> --gradio-por
 
 **请求测试**
 
-我们提供了用于curl请求测试的文档和 [example](./examples)的脚本，具体使用方法可以参考[curl请求说明文档](./docs/pretrain.md).
+我们提供了用于curl请求的测试文档和[测试脚本](./tests)的脚本，具体使用方法可以参考[curl请求说明文档](./docs/tests.md)。
 
 ```bash
 cd ./tests
