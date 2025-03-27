@@ -16,6 +16,8 @@
     <img alt="Model License" src="https://img.shields.io/badge/Apache%202.0%20-green?style=flat&label=Model%20License&link=#" />
   </a>
 
+ | [English](README.md) | [中文](README_CN.md) |
+
 </div>
 
 
