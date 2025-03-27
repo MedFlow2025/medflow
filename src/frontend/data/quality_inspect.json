@@ -1,0 +1,20 @@
+{
+    "input": {
+        "basic_medical_record": {
+            "chief_complaint": "神志模糊",
+            "history_of_present_illness": "胸痛",
+            "past_medical_history": "既往高血压病史1个月，规律服药治疗",
+            "personal_history": "否认吸烟、有饮酒史",
+            "allergy_history": "否认药物和食物过敏史",
+            "physical_examination": {
+                "temperature": "36.7",
+                "pulse": "",
+                "blood_pressure": "99/73",
+                "respiration": "200次/分"
+            },
+            "auxiliary_examination": ""
+        },
+        "control_quality_config_name": "quality_base",
+        "medical_treatment_stage": "初诊"  
+    }
+}

@@ -1,10 +1,12 @@
-fastapi>=0.2.36
+fastapi==0.111.1
+fastapi-cli==0.0.4
+fastbm25==0.0.2
 openai>=1.3.7
-gradio>=4.10
+gradio==5.15.0
+gradio_client==1.7.0
 openpyxl
 sqlalchemy
 pycryptodome
-fastbm25
 id_validator
 jionlp
 aiohttp
@@ -13,10 +15,11 @@ markdown2[all]
 nh3
 numpy
 prompt_toolkit>=3.0.0
-pydantic
+pydantic==2.8.2
 psutil
 requests
-rich>=10.0.0
+rich==13.9.4  #>=10.0.0
 shortuuid
 tiktoken
 uvicorn
+bs4

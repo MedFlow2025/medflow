@@ -1,0 +1,153 @@
+{
+    "check_quality":[
+        {
+            "content": "体温单位",
+            "field": "体格检查;",
+            "item": "体温",
+            "standard": "数值后必须带℃",
+            "auto_modify_type": true,
+            "auto_modify_info": "",
+            "positive_example": "36.8℃",
+            "negative_example": "36.1"
+        },
+        {
+            "content": "脉搏单位",
+            "field": "体格检查;",
+            "item": "脉搏",
+            "standard": "数值后必须带次/分",
+            "auto_modify_type": true,
+            "auto_modify_info": "",
+            "positive_example": "20 次/分",
+            "negative_example": "20, 20次, 20分"
+        },
+        {
+            "content": "血压单位",
+            "field": "体格检查;",
+            "item": "血压",
+            "standard": "数值后必须带mmHg",
+            "auto_modify_type": true,
+            "auto_modify_info": "",
+            "positive_example": "120/80mmHg",
+            "negative_example": "120/80, 120/80m, 120/80mm, 120/80mmH"
+        },
+        {
+            "content": "呼吸单位",
+            "field": "体格检查;",
+            "item": "呼吸",
+            "standard": "数值后必须带次/分",
+            "auto_modify_type": true,
+            "auto_modify_info": "",
+            "positive_example": "20 次/分",
+            "negative_example": "20, 20次, 20分"
+        },
+        {
+            "content": "主诉内容",
+            "field": "主诉;",
+            "item": "",
+            "standard": "只要有内容且不为空就可以",
+            "auto_modify_type": false,
+            "auto_modify_info": "",
+            "positive_example": "",
+            "negative_example": ""
+        },
+        {
+            "content": "现病史内容",
+            "field": "现病史;",
+            "item": "",
+            "standard": "只要有内容且不为空就可以",
+            "auto_modify_type": false,
+            "auto_modify_info": "",
+            "positive_example": "",
+            "negative_example": ""
+        },
+        {
+            "content": "既往史内容",
+            "field": "既往史;",
+            "item": "",
+            "standard": "只要有内容且不为空就可以",
+            "auto_modify_type": false,
+            "auto_modify_info": "",
+            "positive_example": "",
+            "negative_example": ""
+        },
+        {
+            "content": "个人史内容",
+            "field": "个人史;",
+            "item": "",
+            "standard": "只要有内容且不为空就可以",
+            "auto_modify_type": false,
+            "auto_modify_info": "",
+            "positive_example": "",
+            "negative_example": ""
+        },
+        {
+            "content": "过敏史内容",
+            "field": "过敏史;",
+            "item": "",
+            "standard": "只要有内容且不为空就可以",
+            "auto_modify_type": false,
+            "auto_modify_info": "",
+            "positive_example": "",
+            "negative_example": ""
+        },
+        {
+            "content": "体格检查内容",
+            "field": "体格检查;",
+            "item": "",
+            "standard": "只要有内容且不为空就可以",
+            "auto_modify_type": false,
+            "auto_modify_info": "",
+            "positive_example": "",
+            "negative_example": ""
+        },
+        {
+            "content": "辅助检查内容",
+            "field": "辅助检查;",
+            "item": "",
+            "standard": "只要有内容且不为空就可以",
+            "auto_modify_type": false,
+            "auto_modify_info": "",
+            "positive_example": "",
+            "negative_example": ""
+        },
+        {
+            "content": "体温的数值是否符合标准",
+            "field": "体格检查;",
+            "item": "体温",
+            "standard": "35.1~43.0 ℃，包含边界值",
+            "auto_modify_type": false,
+            "auto_modify_info": "",
+            "positive_example": "35.1℃",
+            "negative_example": "35.0℃"
+        },
+        {
+            "content": "脉搏的数值是否符合标准",
+            "field": "体格检查;",
+            "item": "脉搏",
+            "standard": "60~160 次/分，包含边界值",
+            "auto_modify_type": false,
+            "auto_modify_info": "",
+            "positive_example": "60,160",
+            "negative_example": "59,161"
+        },
+        {
+            "content": "血压的数值是否符合标准",
+            "field": "体格检查;",
+            "item": "血压",
+            "standard": "符合人类血压数值",
+            "auto_modify_info": "",
+            "positive_example": "",
+            "negative_example": ""
+        },
+        {
+            "content": "呼吸的数值是否符合标准",
+            "field": "体格检查;",
+            "item": "呼吸",
+            "standard": "12~45 次/分，包含边界值",
+            "auto_modify_type": false,
+            "auto_modify_info": "",
+            "positive_example": "12,45",
+            "negative_example": "11,46"
+        }
+    ]
+}

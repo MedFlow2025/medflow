@@ -1,0 +1,23 @@
+{
+    "input": {
+        "medical_templet": "过敏史：无。\n主诉：头疼三天。\n现病史：无。\n既往史：无。\n个人史：无。",
+        "templet_type": "1",
+        "doctor_supplement": "患者头疼三天，浑身酸痛，口干舌燥喉咙不舒服，痰多，吃了感冒灵效果不明显，没有发烧，近期出去旅游，但没有吃特殊食物；没有过敏史，经常抽烟，一天一包，家族没有明显病史"
+    },
+    "output": {
+        "medical_format": "",
+        "basic_medical_record": {
+            "chief_complaint": "",
+            "history_of_present_illness": "",
+            "past_medical_history": "",
+            "personal_history": "",
+            "allergy_history": "",
+            "physical_examination": "",
+            "auxiliary_examination": ""
+        }
+    },
+    "chat": {
+        "historical_conversations_bak": [],
+        "historical_conversations": []
+    }
+}

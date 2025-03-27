@@ -1,0 +1,498 @@
+{
+    "chat": {
+        "historical_conversations": [
+            {
+                "content": "请问挂什么科室",
+                "role": "user"
+            },
+            {
+                "content": "现在为您返回患者的推荐科室如下：n【呼吸内科门诊】",
+                "role": "assistant"
+            },
+            {
+                "content": "新增排班数据回填",
+                "role": "user"
+            }
+        ],
+        "historical_conversations_bak": [
+            {
+                "content": "请问挂什么科室",
+                "role": "user"
+            },
+            {
+                "content": "现在为您返回患者的推荐科室如下：n【呼吸内科门诊】",
+                "role": "assistant"
+            }
+        ]
+    },
+    "input": {
+        "all_department": [
+            {
+                "department_id": "101211",
+                "department_name": "呼吸内科门诊"
+            },
+            {
+                "department_id": "101511",
+                "department_name": "风湿内科门诊"
+            },
+            {
+                "department_id": "131112",
+                "department_name": "儿科门诊"
+            },
+            {
+                "department_id": "3d81ac0e4a6246cec05b",
+                "department_name": "呼吸内科门诊（复诊云诊室）"
+            },
+            {
+                "department_id": "6b368148271e46aa76de",
+                "department_name": "内分泌科教学门诊"
+            },
+            {
+                "department_id": "0fedb8c03edf46b72dc9",
+                "department_name": "内分泌科门诊（复诊云诊室）"
+            }
+        ],
+        "basic_medical_record": {
+            "allergy_history": "否认食物、药物过敏",
+            "auxiliary_examination": "",
+            "chief_complaint": "咳嗽半天",
+            "history_of_present_illness": "患者于半天前出现咳嗽，无痰，无胸痛，无发热，否认接触过感冒或者有呼吸道疾病的人，否认外出旅行或者到过人群密集的地方。",
+            "past_medical_history": "否认高血压、糖尿病、心脏病、肝病、肾病等病史",
+            "personal_history": "否认吸烟史；否认饮酒史",
+            "physical_examination": ""
+        },
+        "confirmed": null,
+        "hospital_register": [
+            {
+                "department_id": "101211",
+                "department_name": "呼吸内科门诊",
+                "doctor_list": [
+                    {
+                        "date_list": [
+                            {
+                                "date": "2125-03-02",
+                                "time_list": [
+                                    {
+                                        "end_time": "08:30",
+                                        "source_num": "2",
+                                        "start_time": "08:00"
+                                    },
+                                    {
+                                        "end_time": "09:00",
+                                        "source_num": "10",
+                                        "start_time": "08:30"
+                                    },
+                                    {
+                                        "end_time": "09:30",
+                                        "source_num": "7",
+                                        "start_time": "09:00"
+                                    }
+                                ]
+                            },
+                            {
+                                "date": "2125-03-03",
+                                "time_list": [
+                                    {
+                                        "end_time": "08:30",
+                                        "source_num": "8",
+                                        "start_time": "08:00"
+                                    },
+                                    {
+                                        "end_time": "09:00",
+                                        "source_num": "12",
+                                        "start_time": "08:30"
+                                    },
+                                    {
+                                        "end_time": "09:30",
+                                        "source_num": "10",
+                                        "start_time": "09:00"
+                                    }
+                                ]
+                            },
+                            {
+                                "date": "2125-03-06",
+                                "time_list": [
+                                    {
+                                        "end_time": "08:30",
+                                        "source_num": "11",
+                                        "start_time": "08:00"
+                                    },
+                                    {
+                                        "end_time": "09:00",
+                                        "source_num": "12",
+                                        "start_time": "08:30"
+                                    },
+                                    {
+                                        "end_time": "09:30",
+                                        "source_num": "12",
+                                        "start_time": "09:00"
+                                    },
+                                    {
+                                        "end_time": "10:00",
+                                        "source_num": "12",
+                                        "start_time": "09:30"
+                                    },
+                                    {
+                                        "end_time": "10:30",
+                                        "source_num": "13",
+                                        "start_time": "10:00"
+                                    },
+                                    {
+                                        "end_time": "11:00",
+                                        "source_num": "13",
+                                        "start_time": "10:30"
+                                    },
+                                    {
+                                        "end_time": "11:30",
+                                        "source_num": "13",
+                                        "start_time": "11:00"
+                                    },
+                                    {
+                                        "end_time": "12:00",
+                                        "source_num": "13",
+                                        "start_time": "11:30"
+                                    }
+                                ]
+                            },
+                            {
+                                "date": "2125-03-07",
+                                "time_list": [
+                                    {
+                                        "end_time": "14:00",
+                                        "source_num": "14",
+                                        "start_time": "13:30"
+                                    },
+                                    {
+                                        "end_time": "14:30",
+                                        "source_num": "14",
+                                        "start_time": "14:00"
+                                    },
+                                    {
+                                        "end_time": "15:00",
+                                        "source_num": "14",
+                                        "start_time": "14:30"
+                                    },
+                                    {
+                                        "end_time": "15:30",
+                                        "source_num": "14",
+                                        "start_time": "15:00"
+                                    },
+                                    {
+                                        "end_time": "16:00",
+                                        "source_num": "14",
+                                        "start_time": "15:30"
+                                    }
+                                ]
+                            }
+                        ],
+                        "doctor_id": "0600",
+                        "doctor_name": "梁永锋",
+                        "doctor_title": "主任医师"
+                    },
+                    {
+                        "date_list": [
+                            {
+                                "date": "2125-02-28",
+                                "time_list": [
+                                    {
+                                        "end_time": "14:00",
+                                        "source_num": "0",
+                                        "start_time": "13:30"
+                                    },
+                                    {
+                                        "end_time": "14:30",
+                                        "source_num": "0",
+                                        "start_time": "14:00"
+                                    },
+                                    {
+                                        "end_time": "15:00",
+                                        "source_num": "0",
+                                        "start_time": "14:30"
+                                    },
+                                    {
+                                        "end_time": "15:30",
+                                        "source_num": "0",
+                                        "start_time": "15:00"
+                                    },
+                                    {
+                                        "end_time": "16:00",
+                                        "source_num": "0",
+                                        "start_time": "15:30"
+                                    }
+                                ]
+                            },
+                            {
+                                "date": "2125-03-01",
+                                "time_list": [
+                                    {
+                                        "end_time": "14:00",
+                                        "source_num": "0",
+                                        "start_time": "13:30"
+                                    },
+                                    {
+                                        "end_time": "14:30",
+                                        "source_num": "0",
+                                        "start_time": "14:00"
+                                    },
+                                    {
+                                        "end_time": "15:00",
+                                        "source_num": "0",
+                                        "start_time": "14:30"
+                                    },
+                                    {
+                                        "end_time": "15:30",
+                                        "source_num": "0",
+                                        "start_time": "15:00"
+                                    },
+                                    {
+                                        "end_time": "16:00",
+                                        "source_num": "0",
+                                        "start_time": "15:30"
+                                    }
+                                ]
+                            },
+                            {
+                                "date": "2125-03-04",
+                                "time_list": [
+                                    {
+                                        "end_time": "08:30",
+                                        "source_num": "8",
+                                        "start_time": "08:00"
+                                    },
+                                    {
+                                        "end_time": "09:00",
+                                        "source_num": "8",
+                                        "start_time": "08:30"
+                                    },
+                                    {
+                                        "end_time": "09:30",
+                                        "source_num": "8",
+                                        "start_time": "09:00"
+                                    },
+                                    {
+                                        "end_time": "10:00",
+                                        "source_num": "8",
+                                        "start_time": "09:30"
+                                    },
+                                    {
+                                        "end_time": "10:30",
+                                        "source_num": "7",
+                                        "start_time": "10:00"
+                                    },
+                                    {
+                                        "end_time": "11:00",
+                                        "source_num": "7",
+                                        "start_time": "10:30"
+                                    },
+                                    {
+                                        "end_time": "11:30",
+                                        "source_num": "7",
+                                        "start_time": "11:00"
+                                    },
+                                    {
+                                        "end_time": "12:00",
+                                        "source_num": "7",
+                                        "start_time": "11:30"
+                                    }
+                                ]
+                            },
+                            {
+                                "date": "2125-03-07",
+                                "time_list": [
+                                    {
+                                        "end_time": "14:00",
+                                        "source_num": "8",
+                                        "start_time": "13:30"
+                                    },
+                                    {
+                                        "end_time": "14:30",
+                                        "source_num": "8",
+                                        "start_time": "14:00"
+                                    },
+                                    {
+                                        "end_time": "15:00",
+                                        "source_num": "8",
+                                        "start_time": "14:30"
+                                    },
+                                    {
+                                        "end_time": "15:30",
+                                        "source_num": "8",
+                                        "start_time": "15:00"
+                                    },
+                                    {
+                                        "end_time": "16:00",
+                                        "source_num": "8",
+                                        "start_time": "15:30"
+                                    }
+                                ]
+                            }
+                        ],
+                        "doctor_id": "17096391104146af0bf1",
+                        "doctor_name": "王新发",
+                        "doctor_title": "主治医师"
+                    },
+                    {
+                        "date_list": [
+                            {
+                                "date": "2125-03-03",
+                                "time_list": [
+                                    {
+                                        "end_time": "08:30",
+                                        "source_num": "8",
+                                        "start_time": "08:00"
+                                    },
+                                    {
+                                        "end_time": "09:00",
+                                        "source_num": "8",
+                                        "start_time": "08:30"
+                                    },
+                                    {
+                                        "end_time": "09:30",
+                                        "source_num": "8",
+                                        "start_time": "09:00"
+                                    },
+                                    {
+                                        "end_time": "10:00",
+                                        "source_num": "7",
+                                        "start_time": "09:30"
+                                    },
+                                    {
+                                        "end_time": "10:30",
+                                        "source_num": "7",
+                                        "start_time": "10:00"
+                                    },
+                                    {
+                                        "end_time": "11:00",
+                                        "source_num": "7",
+                                        "start_time": "10:30"
+                                    },
+                                    {
+                                        "end_time": "11:30",
+                                        "source_num": "7",
+                                        "start_time": "11:00"
+                                    },
+                                    {
+                                        "end_time": "12:00",
+                                        "source_num": "7",
+                                        "start_time": "11:30"
+                                    }
+                                ]
+                            },
+                            {
+                                "date": "2125-03-06",
+                                "time_list": [
+                                    {
+                                        "end_time": "14:00",
+                                        "source_num": "8",
+                                        "start_time": "13:30"
+                                    },
+                                    {
+                                        "end_time": "14:30",
+                                        "source_num": "8",
+                                        "start_time": "14:00"
+                                    },
+                                    {
+                                        "end_time": "15:00",
+                                        "source_num": "8",
+                                        "start_time": "14:30"
+                                    },
+                                    {
+                                        "end_time": "15:30",
+                                        "source_num": "8",
+                                        "start_time": "15:00"
+                                    },
+                                    {
+                                        "end_time": "16:00",
+                                        "source_num": "8",
+                                        "start_time": "15:30"
+                                    }
+                                ]
+                            },
+                            {
+                                "date": "2125-03-07",
+                                "time_list": [
+                                    {
+                                        "end_time": "08:30",
+                                        "source_num": "8",
+                                        "start_time": "08:00"
+                                    },
+                                    {
+                                        "end_time": "09:00",
+                                        "source_num": "8",
+                                        "start_time": "08:30"
+                                    },
+                                    {
+                                        "end_time": "09:30",
+                                        "source_num": "8",
+                                        "start_time": "09:00"
+                                    },
+                                    {
+                                        "end_time": "10:00",
+                                        "source_num": "8",
+                                        "start_time": "09:30"
+                                    },
+                                    {
+                                        "end_time": "10:30",
+                                        "source_num": "7",
+                                        "start_time": "10:00"
+                                    },
+                                    {
+                                        "end_time": "11:00",
+                                        "source_num": "7",
+                                        "start_time": "10:30"
+                                    },
+                                    {
+                                        "end_time": "11:30",
+                                        "source_num": "7",
+                                        "start_time": "11:00"
+                                    },
+                                    {
+                                        "end_time": "12:00",
+                                        "source_num": "7",
+                                        "start_time": "11:30"
+                                    }
+                                ]
+                            }
+                        ],
+                        "doctor_id": "2447",
+                        "doctor_name": "甘振勇",
+                        "doctor_title": "副主任医师"
+                    }
+                ]
+            }
+        ]
+    },
+    "output": {
+        "chosen_department": [
+            {
+                "department_id": "101211",
+                "department_name": "呼吸内科门诊"
+            }
+        ],
+        "hospital_register": [
+            {
+                "department_id": "",
+                "department_name": "",
+                "doctor_list": [
+                    {
+                        "date_list": [
+                            {
+                                "date": "",
+                                "time_list": [
+                                    {
+                                        "end_time": "",
+                                        "source_num": "",
+                                        "start_time": ""
+                                    }
+                                ]
+                            }
+                        ],
+                        "doctor_id": "",
+                        "doctor_name": "",
+                        "doctor_title": ""
+                    }
+                ]
+            }
+        ]
+    }
+}

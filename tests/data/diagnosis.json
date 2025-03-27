@@ -1,0 +1,50 @@
+{
+    "input": {
+        "client_info": [{
+            "patient": {
+                "patient_name": "张三",
+                "patient_gender": "女",
+                "patient_age": "16",
+                "if_child": "否",
+                "certificate_type": "",
+                "certificate_number": "",
+                "mobile_number": "",
+                "current_address": {
+                    "province": "",
+                    "city": "",
+                    "district": "",
+                    "street": ""
+                },
+                "detailed_address": ""
+            },
+            "guardian": {
+                "guardian_name": "",
+                "certificate_type": "",
+                "certificate_number": ""
+            }
+        }],
+        "basic_medical_record": {
+            "chief_complaint": "咳嗽、喉咙痛3天，严重，影响睡眠和饮食。",
+            "history_of_present_illness": "咳嗽3天，后出现喉咙痛，严重，影响睡眠和饮食。",
+            "past_medical_history": "否认高血压，否认糖尿病，否认心脏病，否认肝病，否认肾病，否认骨折，否认手术，否认外伤。",
+            "personal_history": "否认吸烟;饮酒，一周2次，每次半斤。",
+            "allergy_history": "牛奶",
+            "physical_examination": "",
+            "auxiliary_examination": ""
+        }
+    },
+    "output": {
+        "diagnosis": [
+            {
+                "diagnosis_name": "",
+                "diagnosis_name_retrieve": "",
+                "diagnosis_code": "",
+                "diagnosis_identifier": ""
+            }
+        ]
+    },
+    "chat": {
+        "historical_conversations_bak": [],
+        "historical_conversations": []
+    }
+}

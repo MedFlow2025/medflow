@@ -1,0 +1,109 @@
+# Copyright (c) 2025,  IEIT SYSTEMS Co.,Ltd.  All rights reserved
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import copy
+from .base_diagnosis_request_handler import BaseDiagnosisRequestHandler
+from .prompt_template import *
+from .util_data_models import *
+from .util import *
+import io
+from fastapi.responses import StreamingResponse, JSONResponse
+
+
+class DoctorMedicalRecordProcessChecker:
+    def __init__(self) -> None:
+        pass
+
+    def check(self) -> int:
+        return 9
+
+class DoctorMedicalRecordRequestHandler(BaseDiagnosisRequestHandler):
+    def __init__(self,
+                 receive,
+                 args,
+                 scheme : None,
+                 sub_scheme : None,
+                 request_type: None
+                 ):
+        super().__init__(receive, args, scheme, sub_scheme, request_type)
+        self.receive = RequestV9(**receive)
+
+    def checker_flag(self):
+        self.checker = DoctorMedicalRecordProcessChecker()
+        self.flag = self.checker.check()
+
+    def generate_prompt(self):
+        self.prompt = get_prompt('PromptDoctorMedicalRecord', self.receive, self.scheme)
+        self.prompt.set_prompt()
+
+    def postprocess(self, answer):
+        results = self.postprocess_dmr(self.receive, answer, self.scheme)
+        results_dict = results.model_dump()
+        results_json = json.dumps(results_dict, ensure_ascii=False)
+        results=str(results_json)
+        results = results.encode('utf-8')
+        results = io.BytesIO(results)
+        for re in results:
+            yield re
+        return
+
+    def postprocess_dmr(self, receive, answer, scheme):
+        params = copy.deepcopy(receive)
+        hc = params.chat.historical_conversations
+        hc_bak = params.chat.historical_conversations_bak
+        if hc != [] and hc[-1].role == 'user':
+            hc_bak.append(HistoricalConversations(role='user', content=hc[-1].content))
+        hc.append(HistoricalConversations(role='assistant', content=answer))
+        hc_bak.append(HistoricalConversations(role='assistant', content=answer))
+
+        json_match, text_match = extract_json_and_text(answer)
+        if not isinstance(json_match, re.Match):
+            return params
+        else:
+            try:
+                json_data = json_match.group(0)
+                json_data = eval(json_data)
+                # print(f"大模型匹配内容: \n{json_data=}\n")
+            except:
+                print("Error: There is no matching json data.")
+                return params
+
+        medical_format = ""
+        templet_type = receive.input.templet_type
+        if templet_type == "1":
+            for key, value in json_data.items(): medical_format += f"{key}:{value}\n"
+        elif templet_type == "2":
+            for key, value in json_data.items(): medical_format += f"<p>{key}:{value}</p>"
+            medical_format = "<div><h2>病历</h2>" + medical_format + "</div>"
+        else:
+            raise ValueError(f"Invalid templet_type: {templet_type}")
+
+        medical = {medical_fields.get(key): value for key, value in json_data.items()}
+        basicMedicalRecord = DoctorMedicalRecord.parse_obj(medical)
+        params.output.medical_format = medical_format
+        params.output.basic_medical_record = basicMedicalRecord
+
+        answer = self.format_basic_medical_record(json_data, text_match)
+        hc.pop()
+        hc.append(HistoricalConversations(role='assistant', content=answer))
+
+        return params
+
+    def format_basic_medical_record(self, json_data, text_match):
+        #answer = f"""{text_match}
+        answer = "依据您回复的情况，已经为您生成了病历，如无问题，请点击确认，如还需要补充请直接回复补充。"
+        for key, value in json_data.items():
+                answer += f"""
+【{key}】：{value}"""
+        return answer

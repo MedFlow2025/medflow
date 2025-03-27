@@ -1,0 +1,28 @@
+{
+    "input": null,
+    "output": {
+        "patient_need": [
+            {
+                "need": ""
+            }
+        ]
+    },
+    "chat": {
+        "historical_conversations_bak": [
+            {
+                "role": "assistant",
+                "content": "您好，请问您今天需要哪些方面的医疗服务呢？目前我们可以协助您进行“建立档案”、“预问诊”，“预约挂号”。请简单告诉我您的需求，我将为您转接到最合适的智能医疗助手。"
+            }
+        ],
+        "historical_conversations": [
+            {
+                "role": "assistant",
+                "content": "您好，请问您今天需要哪些方面的医疗服务呢？目前我们可以协助您进行“建立档案”、“预问诊”，“预约挂号”。请简单告诉我您的需求，我将为您转接到最合适的智能医疗助手。"
+            },
+            {
+                "role": "user",
+                "content": "我没来过咱们医院"
+            }
+        ]
+    }
+}
