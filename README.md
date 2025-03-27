@@ -163,7 +163,7 @@ python3 inference.py --model <model_name> --model-url http://<openai ip>:<port>/
 python3 inference_gradio.py --host <server ip> --port <server port> --gradio-port <webui port> --model <model_name>
 ```
 
-**4.3 Function Experience验**
+**4.3 Function Experience**
 
 
 **Request Testing**
