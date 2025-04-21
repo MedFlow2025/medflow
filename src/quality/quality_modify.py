@@ -105,8 +105,9 @@ class QualityModify:
         
         if self.control_quality is None or len(self.control_quality) == 0:
             return self.QUALITY_NO_ABNORM
-        
-        problem_list = [(item.item + "  " + item.check_quality_detaile) for item in self.control_quality if item.check_quality != "" and "无异常" not in item.check_quality]
+
+        problem_list = [(item.item + "  " + (item.check_quality_detaile if item.check_quality_detaile is not None else ""))  
+                        for item in self.control_quality if item.check_quality != "" and "无异常" not in item.check_quality]
         problem_dict = dict()
         for i, v in enumerate(problem_list):
             problem_dict[f"问题{i+1}"] = v

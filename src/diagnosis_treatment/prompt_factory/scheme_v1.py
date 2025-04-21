@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 from ..prompt_template import *
 
 @register_prompt
@@ -28,6 +29,8 @@ class PromptScheme_v1(PromptTemplate):
         self.diagnose_definite = [(item.diagnosis_name_retrieve or item.diagnosis_name)
             for item in self.diag]
         self.pick_therapy = receive.output.pick_therapy
+        physical_examination = json.loads(self.bmr.physical_examination.json())
+        self.physical_examination = {reversed_sub_medical_fields.get(k): v for k, v in physical_examination.items()}
 
     def set_prompt(self):
         self.prompt = {
@@ -43,17 +46,6 @@ class PromptScheme_v1(PromptTemplate):
         return interpret_therapy
 
     def __set_default_therapy(self):
-        other_therapy_map = {
-            "default_therapy": "保守治疗",
-            "surgical_therapy": "手术治疗",
-            "chemo_therapy": "化疗",
-            "radiation_therapy": "放疗",
-            "psycho_therapy": "心理治疗",
-            "rehabilitation_therapy": "康复治疗",
-            "physical_therapy": "物理治疗",
-            "alternative_therapy": "替代疗法",
-            "observation_therapy": "观察治疗"
-        }
         if self.scheme == "pick_therapy":
             #挑选多方案
             system_str=f"""你是一个优秀的专业医生。主要工作是根据患者的病历，从如下9个方案名称中挑选合适的：\
@@ -63,7 +55,7 @@ class PromptScheme_v1(PromptTemplate):
             user_str=f"""当前患者的姓名是{self.ci_p.patient_name}，性别是{self.ci_p.patient_gender}，年龄是{self.ci_p.patient_age}，\
 主诉是“{self.bmr.chief_complaint}”，现病史是“{self.bmr.history_of_present_illness}”，\
 个人史是“{self.bmr.personal_history}”，过敏史是“{self.bmr.allergy_history}”，\
-体格检查是“{self.bmr.physical_examination}”，辅助检查是“{self.bmr.auxiliary_examination}”，\
+体格检查是“{self.physical_examination}”，辅助检查是“{self.bmr.auxiliary_examination}”，\
 患者确诊的疾病有{self.diagnose_definite}，请生成“方案”。"""
 
         elif self.scheme == "default_therapy":
@@ -82,7 +74,7 @@ class PromptScheme_v1(PromptTemplate):
 请注意，输出前请检查处方中要包含对每一种确诊疾病的药品。生成的药品名称要使用中文，严禁使用英文。\
 给出的处方中不能包含注射类药物。
 生成时先说“您已确诊，现在为您生成处方：”。"""
-                    user_str=f"""当前采用的方案是“{other_therapy_map['default_therapy']}”，方案解读是{self.__interpret_therapy('default_therapy')}，\
+                    user_str=f"""当前采用的方案是“{reversed_therapy_scheme_fields['default_therapy']}”，方案解读是{self.__interpret_therapy('default_therapy')}，\
 患者确诊的疾病有{self.diagnose_definite}，请对每项疾病都生成对应的“处方”。"""
                 case "transfusion":
                     #生成输液
@@ -98,7 +90,7 @@ class PromptScheme_v1(PromptTemplate):
 请注意，输出前请检查输液中要包含对每一种确诊疾病的药品。生成的药品名称要使用中文，严禁使用英文。\
 给出的输液中只能包含注射类药物，不能包含片剂、胶囊剂、口服散剂、中药等药物。
 生成时先说“您已确诊，现在为您生成输液：”。"""
-                    user_str=f"""当前采用的方案是“{other_therapy_map['default_therapy']}”，方案解读是{self.__interpret_therapy('default_therapy')}，\
+                    user_str=f"""当前采用的方案是“{reversed_therapy_scheme_fields['default_therapy']}”，方案解读是{self.__interpret_therapy('default_therapy')}，\
 患者确诊的疾病有{self.diagnose_definite}，请对每项疾病都生成对应的“输液”。"""
                 case "disposition":
                     #生成处置
@@ -107,13 +99,13 @@ class PromptScheme_v1(PromptTemplate):
 单次用量、持续时间，不可以漏项。处置中可以生成1~2组处置项。"""
                     user_str=f"""当前患者的主诉是“{self.bmr.chief_complaint}”，现病史是“{self.bmr.history_of_present_illness}”，\
 个人史是“{self.bmr.personal_history}”，过敏史是“{self.bmr.allergy_history}”，\
-体格检查是“{self.bmr.physical_examination}”，辅助检查是“{self.bmr.auxiliary_examination}”，\
-当前采用的方案是“{other_therapy_map['default_therapy']}”，方案解读是{self.__interpret_therapy('default_therapy')}，\
+体格检查是“{self.physical_examination}”，辅助检查是“{self.bmr.auxiliary_examination}”，\
+当前采用的方案是“{reversed_therapy_scheme_fields['default_therapy']}”，方案解读是{self.__interpret_therapy('default_therapy')}，\
 患者确诊的疾病有{self.diagnose_definite}，请生成“处置”。"""
 
         elif self.scheme == "other_therapy":
             #生成治疗方案
-            cked_therapy = other_therapy_map[self.sub_scheme]
+            cked_therapy = reversed_therapy_scheme_fields[self.sub_scheme]
             system_str=f"""你是一个优秀的专业医生。主要工作是根据患者的病历，参考相关医学指南与医疗专业书籍，\
 生成关于“{cked_therapy}”的治疗方案。治疗方案包含治疗编号、治疗类型、治疗名称、针对疾病、治疗计划、潜在风险。\
 治疗方案的格式严格按照如下：{self.format_generate_therapy}。生成时先说“您已确诊，现在为您生成治疗方案：”。\
@@ -121,8 +113,7 @@ class PromptScheme_v1(PromptTemplate):
             user_str=f"""当前患者的姓名是{self.ci_p.patient_name}，性别是{self.ci_p.patient_gender}，年龄是{self.ci_p.patient_age}，\
 主诉是“{self.bmr.chief_complaint}”，现病史是“{self.bmr.history_of_present_illness}”，\
 个人史是“{self.bmr.personal_history}”，过敏史是“{self.bmr.allergy_history}”，\
-体格检查是“{self.bmr.physical_examination}”，辅助检查是“{self.bmr.auxiliary_examination}”，\
-当前采用的方案是“{other_therapy_map[self.sub_scheme]}”，方案解读是{self.__interpret_therapy(self.sub_scheme)}，\
+体格检查是“{self.physical_examination}”，辅助检查是“{self.bmr.auxiliary_examination}”，\
+当前采用的方案是“{reversed_therapy_scheme_fields[self.sub_scheme]}”，方案解读是{self.__interpret_therapy(self.sub_scheme)}，\
 患者确诊的疾病有{self.diagnose_definite}，请生成关于“{cked_therapy}”的治疗方案。"""
         return system_str, user_str
-    

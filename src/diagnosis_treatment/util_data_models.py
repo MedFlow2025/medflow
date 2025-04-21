@@ -13,17 +13,23 @@
 # limitations under the License.
 
 from typing import List, Union
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class HistoricalConversations(BaseModel):
-    role: str
-    content: str
+    role: str = ""
+    content: str = ""
 
 class Chat(BaseModel):
-    historical_conversations_bak: List[HistoricalConversations]
-    historical_conversations: List[HistoricalConversations]
+    historical_conversations_bak: List[HistoricalConversations] = Field(default_factory=list)
+    historical_conversations: List[HistoricalConversations] = Field(default_factory=list)
     prompt_version: str = ""
     model_name: str = ""
+
+class PhyscialExamination(BaseModel):
+    temperature: str = ""
+    pulse: str = ""
+    blood_pressure: str = ""
+    respiration: str = ""
 
 class BasicMedicalRecord(BaseModel):
     chief_complaint: str
@@ -31,7 +37,7 @@ class BasicMedicalRecord(BaseModel):
     past_medical_history: str
     personal_history: str
     allergy_history: str
-    physical_examination: str
+    physical_examination: PhyscialExamination
     auxiliary_examination: str
 
 class DoctorMedicalRecord(BaseModel):
@@ -40,7 +46,7 @@ class DoctorMedicalRecord(BaseModel):
     past_medical_history: str = ""
     personal_history: str = ""
     allergy_history: str = ""
-    physical_examination: str = ""
+    physical_examination: PhyscialExamination = Field(default_factory=PhyscialExamination)
     auxiliary_examination: str = ""
     specialty_examination: str = ""
     cure: str = ""
@@ -115,6 +121,17 @@ class RequestV2(BaseModel):
 
 
 # v3  zh: gua hao, register diagnosis
+class RegisterIntention(BaseModel):
+    intention_tpye: str | None = None
+    department_name: str| None = None
+    doctor_name: str | None = None
+    doctor_title: str | None = None
+    register_date: str | None = None
+    register_time: str | None = None
+    register_source: str | None = None
+    query_subject: str | None = None
+    priority: str | None = None
+
 class TimeList(BaseModel):
     start_time: str
     end_time: str
@@ -128,7 +145,7 @@ class DoctorList(BaseModel):
     doctor_id: str
     doctor_name: str
     doctor_title: str
-    date_list: List[DateList]
+    date_list: List[DateList] | None = None
 
 class Department(BaseModel):
     department_id: str
@@ -140,12 +157,15 @@ class HospitalRegister(Department):
 class InputV3(BaseModel):
     client_info: List[ClientInfo] | None = None
     basic_medical_record: BasicMedicalRecord
-    all_department: List[Department]
-    hospital_register: Union[List[HospitalRegister], List[None]]
+    all_department: List[Department] | None = None
+    hospital_register: Union[List[HospitalRegister], List[None]] | None = None
+    register_intention_enable: bool | None = None
 
 class OutputV3(BaseModel):
     chosen_department: List[Department]
     hospital_register: List[HospitalRegister]
+    register_intention_enable: bool | None = None
+    register_intention_info: List[RegisterIntention]  | None = None
 
 class RequestV3(BaseModel):
     input: InputV3
@@ -155,22 +175,22 @@ class RequestV3(BaseModel):
 
 # v4  zh: zhen duan, diagnosis
 class Diagnosis(BaseModel):
-    diagnosis_name: str
-    diagnosis_name_retrieve: str
-    diagnosis_code: str
-    diagnosis_identifier: str
+    diagnosis_name: str = ""
+    diagnosis_name_retrieve: str = ""
+    diagnosis_code: str = ""
+    diagnosis_identifier: str = ""
 
 class InputV4(BaseModel):
     client_info: Union[List[ClientInfo], List[None]]
     basic_medical_record: BasicMedicalRecord
 
 class OutputV4(BaseModel):
-    diagnosis: List[Diagnosis]
+    diagnosis: List[Diagnosis] = Field(default_factory=lambda: [Diagnosis()])
 
 class RequestV4(BaseModel):
     input: InputV4
-    output: OutputV4
-    chat: Chat
+    output: OutputV4 = Field(default_factory=OutputV4)
+    chat: Chat = Field(default_factory=Chat)
 
 
 # v5  zh: jian cha hua yan, examine assay
@@ -180,39 +200,39 @@ class InputV5(BaseModel):
     diagnosis: List[Diagnosis]
 
 class ExamineContent(BaseModel):
-    examine_code: str
-    examine_category: str
-    examine_name: str
-    examine_name_retrieve: str
-    order_quantity: str
-    examine_result: str
-    corresponding_diagnosis: List[Diagnosis]
+    examine_code: str = ""
+    examine_category: str = ""
+    examine_name: str = ""
+    examine_name_retrieve: str = ""
+    order_quantity: str = ""
+    examine_result: str = ""
+    corresponding_diagnosis: List[Diagnosis] = Field(default_factory=lambda: [Diagnosis()])
 
 class AssayResult(BaseModel):
-    result_id: str
-    result_item: str
-    result_value: float
-    result_identifier: str
-    reference_value: str
-    unit: str
+    result_id: str = ""
+    result_item: str = ""
+    result_value: float = 0.0
+    result_identifier: str = ""
+    reference_value: str = ""
+    unit: str = ""
     
 class AssayContent(BaseModel):
-    assay_code: str
-    assay_category: str
-    assay_name: str
-    assay_name_retrieve: str
-    order_quantity: str
-    assay_result: List[AssayResult]
-    corresponding_diagnosis: List[Diagnosis]
+    assay_code: str = ""
+    assay_category: str = ""
+    assay_name: str = ""
+    assay_name_retrieve: str = ""
+    order_quantity: str = ""
+    assay_result: List[AssayResult] = Field(default_factory=lambda: [AssayResult()])
+    corresponding_diagnosis: List[Diagnosis] = Field(default_factory=lambda: [Diagnosis()])
 
 class OutputV5(BaseModel):
-    examine_content: List[ExamineContent]
-    assay_content: List[AssayContent]
+    examine_content: List[ExamineContent] = Field(default_factory=lambda: [ExamineContent()])
+    assay_content: List[AssayContent] = Field(default_factory=lambda: [AssayContent()])
 
 class RequestV5(BaseModel):
     input: InputV5
-    output: OutputV5
-    chat: Chat
+    output: OutputV5 = Field(default_factory=OutputV5)
+    chat: Chat = Field(default_factory=Chat)
 
 
 # v6  zh: zhi liao fang an, therapy scheme
@@ -238,7 +258,7 @@ class MethodTherapy(BaseModel):
     methodtherapy_content: List[MethodTherapyContent]
 
 class BasicTherapy(BaseModel):
-    method: Union[List[MethodTherapy], List[None]]
+    method: List[MethodTherapy] = Field(default_factory=list)
 
 class PrescriptionContent(BaseModel):
     drug_id: str
@@ -279,26 +299,26 @@ class Disposition(BaseModel):
     disposition_content: List[DispositionContent]
 
 class DefaultTherapy(BaseModel):
-    prescription: Union[List[Prescription], List[None]]
-    transfusion: Union[List[Transfusion], List[None]]
-    disposition: Union[List[Disposition], List[None]]
+    prescription: List[Prescription] = Field(default_factory=list)
+    transfusion: List[Transfusion] = Field(default_factory=list)
+    disposition: List[Disposition] = Field(default_factory=list)
 
 class OutputV6(BaseModel):
-    pick_therapy: Union[List[PickTherapy], List[None]]
-    default_therapy: DefaultTherapy
-    surgical_therapy: BasicTherapy
-    chemo_therapy: BasicTherapy
-    radiation_therapy: BasicTherapy
-    psycho_therapy: BasicTherapy
-    rehabilitation_therapy: BasicTherapy
-    physical_therapy: BasicTherapy
-    alternative_therapy: BasicTherapy
-    observation_therapy: BasicTherapy
+    pick_therapy: List[PickTherapy] = Field(default_factory=list)
+    default_therapy: DefaultTherapy = Field(default_factory=DefaultTherapy)
+    surgical_therapy: BasicTherapy = Field(default_factory=BasicTherapy)
+    chemo_therapy: BasicTherapy = Field(default_factory=BasicTherapy)
+    radiation_therapy: BasicTherapy = Field(default_factory=BasicTherapy)
+    psycho_therapy: BasicTherapy = Field(default_factory=BasicTherapy)
+    rehabilitation_therapy: BasicTherapy = Field(default_factory=BasicTherapy)
+    physical_therapy: BasicTherapy = Field(default_factory=BasicTherapy)
+    alternative_therapy: BasicTherapy = Field(default_factory=BasicTherapy)
+    observation_therapy: BasicTherapy = Field(default_factory=BasicTherapy)
 
 class RequestV6(BaseModel):
     input: InputV6
-    output: Union[OutputV6, None]
-    chat: Chat
+    output: OutputV6 = Field(default_factory=OutputV6)
+    chat: Chat = Field(default_factory=Chat)
 
 
 # v7  zh: fu zhen, return visit
@@ -337,16 +357,16 @@ class RequestV8(BaseModel):
 
 # v9  zh: bing li, doctor medical record
 class InputV9(BaseModel):
-    medical_templet: str
-    templet_type: str
-    basic_medical_record: DoctorMedicalRecord | None = None
+    medical_templet: str | None = None
+    templet_type: str | None = None
+    basic_medical_record: DoctorMedicalRecord = Field(default_factory=DoctorMedicalRecord)
     doctor_supplement: str
 
 class OutputV9(BaseModel):
-    medical_format: str
-    basic_medical_record: Union[BasicMedicalRecord, DoctorMedicalRecord]
+    medical_format: str | None = None
+    basic_medical_record: DoctorMedicalRecord | None = None
 
 class RequestV9(BaseModel):
     input: InputV9
-    output: OutputV9
-    chat: Chat
+    output: OutputV9 = Field(default_factory=OutputV9)
+    chat: Chat  = Field(default_factory=Chat)

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 from ..prompt_template import *
 
 @register_prompt
@@ -25,6 +26,8 @@ class PromptReturnVisit_v1(PromptTemplate):
 #            for item in self.diag if item.diagnosis_identifier == "确诊"])
         self.diagnose_definite = "、".join([(item.diagnosis_name_retrieve or item.diagnosis_name)
             for item in self.diag])
+        physical_examination = json.loads(self.bmr.physical_examination.json())
+        self.physical_examination = {reversed_sub_medical_fields.get(k): v for k, v in physical_examination.items()}
 
     def set_prompt(self):
         self.prompt = {
@@ -47,7 +50,7 @@ class PromptReturnVisit_v1(PromptTemplate):
 -既往史：{self.bmr.past_medical_history}。
 -个人史：{self.bmr.personal_history}。
 -过敏史：{self.bmr.allergy_history}。
--体格检查：{self.bmr.physical_examination}。
+-体格检查：{self.physical_examination}。
 -辅助检查：{self.bmr.auxiliary_examination}。
 -诊断：{self.diagnose_definite}。
 ## Workflows

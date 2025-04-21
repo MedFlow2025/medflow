@@ -29,7 +29,12 @@
             "past_medical_history": "胃窦部溃疡伴出血、肺部感染、糜烂性胃炎、十二指肠炎、贫血、高血压病和腰椎退行性病变，骨质疏松，电解质紊乱，老年性心脏瓣膜病，高血压病史多年，长期服药治疗，否认糖尿病",
             "personal_history": "否认吸烟、酗酒、或过度劳累等习惯",
             "allergy_history": "否认药物和食物过敏史",
-            "physical_examination": "体温： 36.5℃ ， 脉搏： 86次/分， 血压： 150/61mmHg,呼吸:18次",
+            "physical_examination": {
+                "temperature": "36.5℃",
+                "pulse": "86次/分",
+                "blood_pressure": "150/61mmHg",
+                "respiration": "18次"
+            },
             "auxiliary_examination": ""
         },
         "diagnosis": [
@@ -46,56 +51,5 @@
                 "diagnosis_identifier": "疑似"
             }
         ]
-    },
-    "output": {
-        "examine_content": [
-            {
-                "examine_code": "",
-                "examine_category": "",
-                "examine_name": "",
-                "examine_name_retrieve": "",
-                "order_quantity": "",
-                "examine_result": "",
-                "corresponding_diagnosis": [
-                    {
-                        "diagnosis_name": "",
-                        "diagnosis_name_retrieve": "",
-                        "diagnosis_code": "",
-                        "diagnosis_identifier": ""
-                    }
-                ]
-            }
-        ],
-        "assay_content": [
-            {
-                "assay_code": "",
-                "assay_category": "",
-                "assay_name": "",
-                "assay_name_retrieve": "",
-                "order_quantity": "",
-                "assay_result": [
-                    {
-                        "result_id": "",
-                        "result_item": "",
-                        "result_value": 0.0,
-                        "result_identifier": "",
-                        "reference_value": "",
-                        "unit": ""
-                    }
-                ],
-                "corresponding_diagnosis": [
-                    {
-                        "diagnosis_name": "",
-                        "diagnosis_name_retrieve": "",
-                        "diagnosis_code": "",
-                        "diagnosis_identifier": ""
-                    }
-                ]
-            }
-        ]
-    },
-    "chat": {
-        "historical_conversations_bak": [],
-        "historical_conversations": []
     }
 }

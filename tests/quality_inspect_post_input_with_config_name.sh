@@ -19,7 +19,7 @@ curl -X 'POST' \
             },
             "auxiliary_examination": ""
         },
-        "control_quality_config_name": "quality_1"
+        "control_quality_config_name": "quality_base"
     }
 }
 '

@@ -559,7 +559,12 @@
             "past_medical_history": "",
             "personal_history": "",
             "allergy_history": "",
-            "physical_examination": "",
+            "physical_examination": {
+                "temperature": "",
+                "pulse": "",
+                "blood_pressure": "",
+                "respiration": ""
+            },
             "auxiliary_examination": ""
         },
         "chosen_department": [

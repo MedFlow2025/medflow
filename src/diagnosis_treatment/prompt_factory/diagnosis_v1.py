@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 from ..prompt_template import *
 
 @register_prompt
@@ -20,6 +21,8 @@ class PromptDiagnosis_v1(PromptTemplate):
         super().__init__()
         self.ci_p = receive.input.client_info[0].patient
         self.bmr = receive.input.basic_medical_record
+        physical_examination = json.loads(self.bmr.physical_examination.json())
+        self.physical_examination = {reversed_sub_medical_fields.get(k): v for k, v in physical_examination.items()}
 
     def set_prompt(self):
         self.prompt = {
@@ -37,5 +40,5 @@ class PromptDiagnosis_v1(PromptTemplate):
         user_str=f"""当前患者的姓名是{self.ci_p.patient_name}，性别是{self.ci_p.patient_gender}，年龄是{self.ci_p.patient_age}，\
 主诉是“{self.bmr.chief_complaint}”，现病史是“{self.bmr.history_of_present_illness}”，\
 个人史是“{self.bmr.personal_history}”，过敏史是“{self.bmr.allergy_history}”，\
-体格检查是“{self.bmr.physical_examination}”，辅助检查是“{self.bmr.auxiliary_examination}”，请生成“诊断”。"""
+体格检查是“{self.physical_examination}”，辅助检查是“{self.bmr.auxiliary_examination}”，请生成“诊断”。"""
         return system_str, user_str

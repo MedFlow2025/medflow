@@ -99,7 +99,8 @@ def generate_new_questions_structure(original_questions, original_answers):
                     "questionAnswerContent": answer_content
                 })
         new_structure.append(new_question)
-    return [{"questionsList": new_structure}]
+    # return [{"questionsList": new_structure}]
+    return new_structure
 
 def generate_followup_report(original_json_data, chat_history, original_answers):
      followup_report = copy.deepcopy(original_json_data)

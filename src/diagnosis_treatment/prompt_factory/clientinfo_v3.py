@@ -210,7 +210,7 @@ class PromptClientInfo_v3(PromptTemplate):
     证件号码: {self.ci_g.certificate_number}
 ## Workflow
 1.依据<Input>中的患者信息与监护人信息，生成档案。生成档案时先说“现在为您返回患者的信息如下：”。
-档案严格按照如下格式：{self.format_client_info}。\
+档案严格按照如下格式：{self.format_client_info}。
 2.如果患者表示档案正确的意思时，回复“好的，谢谢！祝您早日康复！”。
 3.如果患者表示档案需要修改，按照患者的要求重新生成档案。档案生成时先说“现在为您返回患者的信息如下：”。
 档案的格式为json格式，例如：{self.format_client_info}。

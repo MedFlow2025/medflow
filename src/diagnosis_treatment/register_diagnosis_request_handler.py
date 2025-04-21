@@ -27,6 +27,9 @@ from .util_sqlite_function import *
 from .util import *
 import io
 from fastapi.responses import StreamingResponse, JSONResponse
+from pydantic import ValidationError
+from fastapi import HTTPException
+import time
 
 ADD_REGISTRATION_INFO_TO_PROMPT = False
 
@@ -71,31 +74,44 @@ class DatabaseSchema:
 
         self.metadata.create_all(self.engine)
 
+
     def __define_database(self):
         now = datetime.datetime.now().strftime('%Y%m%d%H%M')
         json_hr_i = jsonable_encoder(self.hr_i)
         i = 0
-        list_hr_i = [
-            [
-                i := i + 1,
-                department_l["department_id"],
-                department_l["department_name"],
-                doctor_l["doctor_id"],
-                doctor_l["doctor_name"],
-                doctor_l["doctor_title"],
-                date_l["date"],
-                time_l["start_time"],
-                time_l["end_time"],
-                time_l["source_num"]
-            ]
-            for department_l in json_hr_i
-            for doctor_l in department_l["doctor_list"]
-            for date_l in doctor_l["date_list"]
-            for time_l in date_l["time_list"]
-            if int(date_l['date'].replace("-", "") + time_l['start_time'].replace(":", "")) >= int(now)
-        ]
+        list_hr_i = []
+        for department_l in json_hr_i:
+            department_id = department_l.get("department_id", "default_department_id")
+            department_name = department_l.get("department_name", "default_department_name")
+            for doctor_l in department_l.get("doctor_list", []):
+                doctor_id = doctor_l.get("doctor_id", "default_doctor_id")
+                doctor_name = doctor_l.get("doctor_name", "default_doctor_name")
+                doctor_title = doctor_l.get("doctor_title", "default_doctor_title")
+                date_list = doctor_l.get("date_list")
+                if date_list is None:
+                    date_list = []
+                for date_l in date_list:
+                    date = date_l.get("date", "default_date")
+                    for time_l in date_l.get("time_list", []):
+                        start_time = time_l.get("start_time", "default_start_time")
+                        end_time = time_l.get("end_time", "default_end_time")
+                        source_num = time_l.get("source_num", 0)
+                        if int(date.replace("-", "") + start_time.replace(":", "")) >= int(now):
+                            i += 1
+                            list_hr_i.append([
+                                i,
+                                department_id,
+                                department_name,
+                                doctor_id,
+                                doctor_name,
+                                doctor_title,
+                                date,
+                                start_time,
+                                end_time,
+                                source_num
+                            ])
 
-        #insert data to database table
+        # insert data to database table
         col_name = [c.key for c in self.register.c]
         try:
             zip_hr_i = []
@@ -109,6 +125,7 @@ class DatabaseSchema:
             print(f"Table created successfully: {self.register.name}")
         except Exception as e:
             print(f"Error inserting row into table: {self.register.name}.")
+            
 
     def __test_database(self):
         #Tests whether the amount of inserted data is correct
@@ -134,7 +151,15 @@ class RegisterDiagnosisRequestHandler(BaseDiagnosisRequestHandler):
                  request_type: None,
                  ):
         super().__init__(receive, args, scheme, sub_scheme,request_type)
-        self.receive = RequestV3(**receive)
+        try:
+            self.receive = RequestV3(**receive)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=e.errors())
+
+        self.register_model = REGISTER_MODEL_TYPE_BASE
+        if self.receive.input.register_intention_enable is not None and self.receive.input.register_intention_enable == True:
+            self.register_model = REGISTER_MODEL_TYPE_INTENTION
+
         self.db_engine = create_engine(f"sqlite:///{self.args.database}/medical_assistant.db")
         self.hr_i = self.receive.input.hospital_register
     
@@ -144,19 +169,20 @@ class RegisterDiagnosisRequestHandler(BaseDiagnosisRequestHandler):
 
     def generate_prompt(self):
         self.tmp_engine = None
-        db = DatabaseSchema(self.receive)
-        self.tmp_engine = db.run()
-        self.prompt = get_prompt('PromptHospitalRegister', self.receive, self.db_engine, self.flag, self.tmp_engine)
+        if REGISTER_MODEL_TYPE_BASE == self.register_model: 
+            db = DatabaseSchema(self.receive)
+            self.tmp_engine = db.run()
+        self.prompt = get_prompt('PromptHospitalRegister', self.receive, self.db_engine, self.flag, self.tmp_engine, self.args.department_path)
         self.prompt.set_prompt()
         
-    def postprocess(self, messages):
+    def postprocess_model_base(self, messages):
         self.generate_prompt()
         messages = self.preprocess(self.receive, self.prompt, self.flag)
         answer=""
         answers = self.predict_stream(messages, self.temprature, self.top_p)
         for re in answers:
             answer+=re
-            yield re
+            yield re        
         match self.flag:
             case 31|32:
                 self.results = self.postprocess_hr(self.receive, answer, self.flag)
@@ -175,7 +201,7 @@ class RegisterDiagnosisRequestHandler(BaseDiagnosisRequestHandler):
                             sql_department_name = self.get_department_name(sql_str)
                             sql_answer = self.search_register_random_top_10(sql_department_name)
                             
-                        prompt = get_prompt('PromptHospitalRegister', self.results, self.db_engine, 34, self.tmp_engine, sql_answer, json_data, intent_flag, passed)
+                        prompt = get_prompt('PromptHospitalRegister', self.results, self.db_engine, 34, self.tmp_engine, self.args.department_path, sql_answer, json_data, intent_flag, passed)
 
                         answer = prompt.get_generate_register()
                         self.results = self.postprocess_hr(self.results, answer, 34)
@@ -194,6 +220,90 @@ class RegisterDiagnosisRequestHandler(BaseDiagnosisRequestHandler):
         for re in results:
             yield re
         return
+
+    # 这里只用了user相关的对话信息，加上系统信息后，对模型产出结果又负面影响
+    def preprocess_model_intention(self, receive, prompt, flag):
+        params = copy.deepcopy(receive)
+        hc = params.chat.historical_conversations
+        hc_bak = params.chat.historical_conversations_bak
+
+        if hc != [] and hc[-1].role == 'user':
+            hc_bak.append(HistoricalConversations(role='user', content=hc[-1].content))
+        infer_hc = self.handle_history_chat(hc_bak)
+
+        prompt_content = prompt.get_prompt(flag)
+        messages=[{"role": "system", "content": prompt_content[0]}]
+        for item in infer_hc:
+            if item.role == "user":
+                messages.append({'role': item.role, 'content': item.content})
+            # messages.append({'role': item.role, 'content': item.content})
+        return messages
+
+    def postprocess_model_intention(self, messages):
+        params = copy.deepcopy(self.receive)      
+        self.generate_prompt()
+        messages.extend(self.preprocess_model_intention(self.receive, self.prompt, self.flag)) 
+        answer=""
+        answers = self.predict_stream(messages, self.temprature, self.top_p)
+        for re_answer in answers:
+            answer+=re_answer
+            yield re_answer
+
+        hc = params.chat.historical_conversations
+        hc_bak = params.chat.historical_conversations_bak
+        if hc != [] and hc[-1].role == 'user':
+            hc_bak.append(HistoricalConversations(role='user', content=hc[-1].content))
+        hc.append(HistoricalConversations(role='assistant', content=answer))
+        hc_bak.append(HistoricalConversations(role='assistant', content=answer))
+
+        params.output.register_intention_enable = params.input.register_intention_enable
+
+        json_pattern = re.compile(r'\[.*\]', re.DOTALL)  # 匹配 JSON 数组
+        json_match = json_pattern.search(answer)
+        if isinstance(json_match, re.Match):
+            try:
+                json_data = json_match.group(0)
+                json_array = json.loads(json_data)
+
+                params.output.register_intention_info = []
+
+                for json_obj in json_array:
+                    # json 转 RegisterIntention
+                    mapped_data = {
+                        register_intention_field_mapping.get(key, key): value
+                        for key, value in json_obj.items()
+                        if value is not None and value != "" and value != "不限"
+                    }
+                    # if 'department_name' not in mapped_data and params.output.hospital_register[0] is not None:
+                    #     mapped_data['department_name'] = params.output.hospital_register[0].department_name
+                    # elif 'department_name' not in mapped_data and params.output.hospital_register[0] is None:
+                    #     mapped_data['department_name'] = "未指定"
+                    register_intention = RegisterIntention(**mapped_data)
+                    params.output.register_intention_info.append(register_intention)
+
+            except Exception as e:
+                print(f"Error: There is no matching json data {e}  answer {answer}, json_data {json_data}.")
+        else:
+            print(f"No JSON array found in the answer  {answer}.   ")
+
+        results_dict = params.model_dump(exclude_none = True)
+        results_json = json.dumps(results_dict, ensure_ascii=False)
+        results=str(results_json)
+        results = results.encode('utf-8')
+        results = io.BytesIO(results)
+        for re_answer in results:
+            yield re_answer
+        return
+
+    def postprocess(self, messages):
+        self.strategy_mapping = {
+            REGISTER_MODEL_TYPE_BASE: self.postprocess_model_base,
+            REGISTER_MODEL_TYPE_INTENTION: self.postprocess_model_intention
+        }
+        processor = self.strategy_mapping.get(self.register_model)
+        if processor:
+            return processor(messages)
+        return messages
 
     def get_doctor_info(self, input_data: InputV3, doctor_name: str, department_name: str):
         """

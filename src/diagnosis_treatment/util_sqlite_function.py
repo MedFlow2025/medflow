@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import json
 from fastbm25 import fastbm25
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -79,3 +80,10 @@ def query_fastbm25(database_url, query_item: str, engine_flag: str):
     if results != []:
         flag = character_percentage(query_item, results[0][0])
     return results if flag else None
+
+def department_introduction(department_path):
+    with open(department_path, "r") as f:
+        all_department = json.load(f)
+    department_intro = [{item['department_name']: item['introduction']} for item in all_department['all_department']
+        if item['introduction'] != ""]
+    return department_intro

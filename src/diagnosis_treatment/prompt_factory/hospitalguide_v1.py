@@ -14,10 +14,12 @@
 
 from ..prompt_template import *
 from sqlalchemy import text
+from ..util_sqlite_function import department_introduction
+from fastapi import HTTPException
 
 @register_prompt
 class PromptHospitalGuide_v1(PromptTemplate):
-    def __init__(self, receive, db_engine, scheme) -> None:
+    def __init__(self, receive, db_engine, scheme, department_path) -> None:
         super().__init__()
         self.ci_p = receive.input.client_info[0].patient
         self.all_department = list(department.department_name for department in receive.input.all_department) \
@@ -25,6 +27,7 @@ class PromptHospitalGuide_v1(PromptTemplate):
         self.bmr = receive.output.basic_medical_record
         self.db_engine = db_engine
         self.scheme = scheme
+        self.department_intro = department_introduction(department_path)
 
     def set_prompt(self):
         self.prompt = {
@@ -34,7 +37,6 @@ class PromptHospitalGuide_v1(PromptTemplate):
 
     def __set_hospital_guide(self):
         #8-导诊
-        gender_map={"男": "女", "女": "男"}
         match self.scheme:
             case "simple":
                 system_str=f"""#Role:
@@ -55,6 +57,10 @@ class PromptHospitalGuide_v1(PromptTemplate):
 2）第二种是不太确信目标科室，生成2到3个候选科室。科室信息格式如下：{self.format_hospital_guide2}。\
 生成前说“为您推荐以下科室：”。
 科室要在如下名称中进行选择：{self.all_department}。
+
+科室的诊疗范围，可参考如下：
+{self.department_intro}
+
 ## style
 你的说话风格需要是语气温和、耐心细致、专业自信，用词准确，并且需要适时地表达同情和关怀。
 ## Initialization:
@@ -99,7 +105,7 @@ class PromptHospitalGuide_v1(PromptTemplate):
 当前患者的姓名是“{self.ci_p.patient_name}”，性别是“{self.ci_p.patient_gender}”，年龄是“{self.ci_p.patient_age}”，已知的患者病情有“{self.bmr.chief_complaint}”，\
 按<Workflow>的顺序和患者对话。"""
             case _:
-                system_str=""
+                raise HTTPException(status_code=400, detail=f"Invalid Parameter: scheme must be equal to simple or detailed.")
         return system_str, None
 
 #    def search_department_all(self):

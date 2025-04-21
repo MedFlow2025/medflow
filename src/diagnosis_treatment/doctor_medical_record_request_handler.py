@@ -18,8 +18,8 @@ from .prompt_template import *
 from .util_data_models import *
 from .util import *
 import io
-from fastapi.responses import StreamingResponse, JSONResponse
-
+from pydantic import ValidationError
+from fastapi import HTTPException
 
 class DoctorMedicalRecordProcessChecker:
     def __init__(self) -> None:
@@ -37,7 +37,10 @@ class DoctorMedicalRecordRequestHandler(BaseDiagnosisRequestHandler):
                  request_type: None
                  ):
         super().__init__(receive, args, scheme, sub_scheme, request_type)
-        self.receive = RequestV9(**receive)
+        try:
+            self.receive = RequestV9(**receive)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=e.errors())
 
     def checker_flag(self):
         self.checker = DoctorMedicalRecordProcessChecker()
@@ -80,16 +83,37 @@ class DoctorMedicalRecordRequestHandler(BaseDiagnosisRequestHandler):
                 return params
 
         medical_format = ""
-        templet_type = receive.input.templet_type
-        if templet_type == "1":
-            for key, value in json_data.items(): medical_format += f"{key}:{value}\n"
-        elif templet_type == "2":
-            for key, value in json_data.items(): medical_format += f"<p>{key}:{value}</p>"
-            medical_format = "<div><h2>病历</h2>" + medical_format + "</div>"
+        if receive.input.medical_templet != None:
+            templet_type = receive.input.templet_type
+            if templet_type == "1":
+                for key, value in json_data.items():
+                    if not isinstance(value, dict):
+                        medical_format += f"{key}:{value}\n"
+                    else:
+                        medical_format += f"{key}:\n"
+                        for k, v in value.items(): medical_format += f"  {k}: {v}\n"
+            elif templet_type == "2":
+                for key, value in json_data.items():
+                    if not isinstance(value, dict):
+                        medical_format += f"<p>{key}:{value}</p>"
+                    else:
+                        sub_value = ""
+                        for k, v in value.items(): sub_value += f"  {k}: {v}"
+                        medical_format += f"<p>{key}:{sub_value}</p>"
+                medical_format = "<div><h2>病历</h2>" + medical_format + "</div>"
+            else:
+                raise HTTPException(status_code=400, detail=f"Invalid Parameter: templet_type must be equal to 1 or 2.")
         else:
-            raise ValueError(f"Invalid templet_type: {templet_type}")
+            for key, value in json_data.items():
+                if not isinstance(value, dict):
+                    if value == "": value = "无"
+                    medical_format += f"{key}:{value}\n"
+                else:
+                    medical_format += f"{key}:\n"
+                    for k, v in value.items(): medical_format += f"  {k}: {v}\n"
 
-        medical = {medical_fields.get(key): value for key, value in json_data.items()}
+        medical = {medical_fields.get(key): (value if not isinstance(value, dict) 
+            else {sub_medical_fields.get(k): v for k, v in value.items()}) for key, value in json_data.items()}
         basicMedicalRecord = DoctorMedicalRecord.parse_obj(medical)
         params.output.medical_format = medical_format
         params.output.basic_medical_record = basicMedicalRecord
@@ -104,6 +128,9 @@ class DoctorMedicalRecordRequestHandler(BaseDiagnosisRequestHandler):
         #answer = f"""{text_match}
         answer = "依据您回复的情况，已经为您生成了病历，如无问题，请点击确认，如还需要补充请直接回复补充。"
         for key, value in json_data.items():
-                answer += f"""
-【{key}】：{value}"""
+            if not isinstance(value, dict):
+                answer += f"【{key}】：{value}\n"
+            else:
+                answer += f"【{key}】\n"
+                for k, v in value.items(): answer += f"  {k}: {v}\n"
         return answer

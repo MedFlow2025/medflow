@@ -29,7 +29,12 @@
             "past_medical_history": "胃窦部溃疡伴出血、肺部感染、糜烂性胃炎、十二指肠炎、贫血、高血压病和腰椎退行性病变，骨质疏松，电解质紊乱，老年性心脏瓣膜病，高血压病史多年，长期服药治疗，否认糖尿病",
             "personal_history": "否认吸烟、酗酒、或过度劳累等习惯",
             "allergy_history": "否认药物和食物过敏史",
-            "physical_examination": "体温： 36.5℃ ， 脉搏： 86次/分， 血压： 150/61mmHg,呼吸:18次",
+            "physical_examination": {
+                "temperature": "36.5℃",
+                "pulse": "86次/分",
+                "blood_pressure": "150/61mmHg",
+                "respiration": "18次"
+            },
             "auxiliary_examination": ""
         },
         "diagnosis": [
@@ -61,39 +66,6 @@
                 "picked_therapy": "rehabilitation_therapy",
                 "interpret_therapy": "康复治疗是辅助保守治疗和手术治疗的方案，旨在帮助患者恢复身体功能和生活质量。这可能包括物理治疗、康复训练等，以促进患者的康复。康复治疗通常在病情稳定后进行，有助于患者更快地恢复健康。"
             }
-        ],
-        "default_therapy": {
-            "prescription": [],
-            "transfusion": [],
-            "disposition": []
-        },
-        "surgical_therapy": {
-            "method": []
-        },
-        "chemo_therapy": {
-            "method": []
-        },
-        "radiation_therapy": {
-            "method": []
-        },
-        "psycho_therapy": {
-            "method": []
-        },
-        "rehabilitation_therapy": {
-            "method": []
-        },
-        "physical_therapy": {
-            "method": []
-        },
-        "alternative_therapy": {
-            "method": []
-        },
-        "observation_therapy": {
-            "method": []
-        }
-    },
-    "chat": {
-        "historical_conversations_bak": [],
-        "historical_conversations": []
+        ]
     }
 }

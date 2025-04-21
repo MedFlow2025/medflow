@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 from ..prompt_template import *
 
 @register_prompt
@@ -23,6 +24,8 @@ class PromptExamAss_v1(PromptTemplate):
         self.diag = receive.input.diagnosis
         self.diagnose_suspect = [(item.diagnosis_name_retrieve or item.diagnosis_name)
             for item in self.diag if item.diagnosis_identifier == "疑似"]
+        physical_examination = json.loads(self.bmr.physical_examination.json())
+        self.physical_examination = {reversed_sub_medical_fields.get(k): v for k, v in physical_examination.items()}
 
     def set_prompt(self):
         self.prompt = {
@@ -43,6 +46,6 @@ class PromptExamAss_v1(PromptTemplate):
             user_str=f"""当前患者的姓名是{self.ci_p.patient_name}，性别是{self.ci_p.patient_gender}，年龄是{self.ci_p.patient_age}，\
 主诉是“{self.bmr.chief_complaint}”，现病史是“{self.bmr.history_of_present_illness}”，\
 个人史是“{self.bmr.personal_history}”，过敏史是“{self.bmr.allergy_history}”，\
-体格检查是“{self.bmr.physical_examination}”，辅助检查是“{self.bmr.auxiliary_examination}”，\
+体格检查是“{self.physical_examination}”，辅助检查是“{self.bmr.auxiliary_examination}”，\
 请根据诊断中为“疑似”的{self.diagnose_suspect}项，生成“检查”或“化验”。"""
         return system_str, user_str

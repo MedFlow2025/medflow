@@ -21,6 +21,8 @@ from .util_sqlite_function import *
 from .util import *
 import io
 from fastapi.responses import StreamingResponse, JSONResponse
+from pydantic import ValidationError
+from fastapi import HTTPException
 
 class TherapySchemeProcessChecker:
     def __init__(self) -> None:
@@ -38,7 +40,10 @@ class TherapySchemeRequestHandler(BaseDiagnosisRequestHandler):
                  request_type: None,
                  ):
         super().__init__(receive, args, scheme, sub_scheme,request_type)
-        self.receive = RequestV6(**receive)
+        try:
+            self.receive = RequestV6(**receive)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=e.errors())
         self.db_engine = create_engine(f"sqlite:///{self.args.database}/medical_assistant.db")
         match scheme:
             case "default_therapy" | "other_therapy":
@@ -85,22 +90,11 @@ class TherapySchemeRequestHandler(BaseDiagnosisRequestHandler):
                 print("Error: There is no matching json data.")
                 return params
 
-        other_therapy_map = {
-            "保守治疗": "default_therapy",
-            "手术治疗": "surgical_therapy",
-            "化疗": "chemo_therapy",
-            "放疗": "radiation_therapy",
-            "心理治疗": "psycho_therapy",
-            "康复治疗": "rehabilitation_therapy",
-            "物理治疗": "physical_therapy",
-            "替代疗法": "alternative_therapy",
-            "观察治疗": "observation_therapy"
-        }
         if scheme == "pick_therapy":
             pick_therapy_item = []
             for item in json_data:
                 pick_therapy_item.append(PickTherapy(
-                    picked_therapy=other_therapy_map[item['方案名称']],
+                    picked_therapy=therapy_scheme_fields[item['方案名称']],
                     interpret_therapy=item['方案解读']
                 ))
             params.output.pick_therapy = pick_therapy_item

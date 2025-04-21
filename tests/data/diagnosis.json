@@ -29,22 +29,13 @@
             "past_medical_history": "否认高血压，否认糖尿病，否认心脏病，否认肝病，否认肾病，否认骨折，否认手术，否认外伤。",
             "personal_history": "否认吸烟;饮酒，一周2次，每次半斤。",
             "allergy_history": "牛奶",
-            "physical_examination": "",
+            "physical_examination": {
+                "temperature": "",
+                "pulse": "",
+                "blood_pressure": "",
+                "respiration": ""
+            },
             "auxiliary_examination": ""
         }
-    },
-    "output": {
-        "diagnosis": [
-            {
-                "diagnosis_name": "",
-                "diagnosis_name_retrieve": "",
-                "diagnosis_code": "",
-                "diagnosis_identifier": ""
-            }
-        ]
-    },
-    "chat": {
-        "historical_conversations_bak": [],
-        "historical_conversations": []
     }
 }

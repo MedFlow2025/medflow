@@ -21,6 +21,8 @@ from .util_sqlite_function import *
 from .util import *
 import io
 from fastapi.responses import StreamingResponse, JSONResponse
+from pydantic import ValidationError
+from fastapi import HTTPException
 
 class HospitalGuideProcessChecker:
     def __init__(self, receive) -> None:
@@ -38,7 +40,10 @@ class HospitalGuideRequestHandler(BaseDiagnosisRequestHandler):
                  request_type: None
                  ):
         super().__init__(receive, args, scheme, sub_scheme, request_type)
-        self.receive = RequestV8(**receive)
+        try:
+            self.receive = RequestV8(**receive)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=e.errors())
         self.db_engine = create_engine(f"sqlite:///{self.args.database}/medical_assistant.db")
 
     def checker_flag(self):
@@ -46,7 +51,7 @@ class HospitalGuideRequestHandler(BaseDiagnosisRequestHandler):
         self.flag = self.checker.check()
 
     def generate_prompt(self):
-        self.prompt = get_prompt('PromptHospitalGuide', self.receive, self.db_engine, self.scheme)
+        self.prompt = get_prompt('PromptHospitalGuide', self.receive, self.db_engine, self.scheme, self.args.department_path)
         self.prompt.set_prompt()
 
     def postprocess(self, messages):
@@ -94,17 +99,14 @@ class HospitalGuideRequestHandler(BaseDiagnosisRequestHandler):
 
                 if '推荐科室' in json_data and json_data['推荐科室']:
                     department_item = []
+                    all_department = [{"department_id":v.department_id, "department_name":v.department_name} for v in self.receive.input.all_department]
                     for item in json_data['推荐科室']:
                         query_item = item['科室名称']
-                        query_result = query_fastbm25(self.args.fastbm25_path, query_item, "department")
-                        if self.args.fastbm25 and query_result:
-                            query_item = query_result[0][0]
-                            sql_str = f"SELECT department_hierarchy_code, department_name, COALESCE(alias, department_name) \
-                                AS name FROM department_info WHERE name=\"{query_item}\""
-                            search_result = search_database(self.db_engine, sql_str)
+                        search_result = list(filter(lambda item: query_item in item['department_name'], all_department))
+                        if search_result:
                             department_item.append(Department(
-                                department_id=search_result[0][0],
-                                department_name=search_result[0][1]
+                                department_id=search_result[0]['department_id'],
+                                department_name=search_result[0]['department_name']
                             ))
                         else:
                             department_item.append(Department(

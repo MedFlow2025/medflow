@@ -1,0 +1,75 @@
+{
+    "input": {
+        "basic_medical_record": {
+            "chief_complaint": "咳嗽一周伴头痛、嗓子疼。",
+            "history_of_present_illness": "患者出现干咳，持续一周，伴有头痛和嗓子疼，无胸痛和呼吸困难。",
+            "past_medical_history": "否认高血压，否认糖尿病，否认冠心病，否认脑梗塞，左腿骨折。",
+            "personal_history": "吸烟史：否认；饮酒史：一周一次，一次半斤；",
+            "allergy_history": "药物过敏：否认；食物过敏：牛奶",
+            "physical_examination": {
+                "temperature": "",
+                "pulse": "",
+                "blood_pressure": "",
+                "respiration": ""
+            },
+            "auxiliary_examination": ""
+        },
+        "register_intention_enable": true
+    },
+    "output": {
+        "chosen_department": [
+            {
+                "department_id": "5a",
+                "department_name": "呼吸内科门诊"
+            }
+        ],
+        "hospital_register": [
+            {
+                "department_id": "5a",
+                "department_name": "呼吸内科门诊",
+                "doctor_list": [
+                    {
+                        "doctor_id": "U032",
+                        "doctor_name": "[医生姓名]",
+                        "doctor_title": "副主任医师",
+                        "date_list": [
+                            {
+                                "date": "[日期]",
+                                "time_list": [
+                                    {
+                                        "start_time": "[开始时间]",
+                                        "end_time": "[结束时间]",
+                                        "source_num": "14"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "chat": {
+        "historical_conversations_bak": [
+            {
+                "role": "assistant",
+                "content": "\n现在为您返回患者的推荐科室如下：\n[\n    {\n        \"科室编号\": \"001\",\n        \"科室名称\": \"呼吸内科门诊\"\n    },\n    {\n        \"科室编号\": \"002\",\n        \"科室名称\": \"耳鼻喉科门诊\"\n    }\n]"
+            },
+            {
+                "role": "assistant",
+                "content": "\n依据您的病情，我们为您推荐如下预约就诊，您看是否可以？\n[{\n    \"科室编号\": \"5ae37e47016d46aa2073.101211.\",\n    \"科室名称\": \"呼吸内科门诊\",\n    \"医生编号\": \"U0321366704108081152\",\n    \"医生姓名\": \"[医生姓名]\",\n    \"医生职称\": \"副主任医师\",\n    \"挂号日期\": \"[日期]\",\n    \"起始时间\": \"[开始时间]\",\n    \"终止时间\": \"[结束时间]\",\n    \"号源数量\": \"14\"\n}]"
+            }
+        ],
+        "historical_conversations": [
+            {
+                "role": "assistant",
+                "content": "现在为您返回患者的推荐科室如下：\n【呼吸内科门诊】\n【耳鼻喉科门诊】"
+            },
+            {
+                "role": "assistant",
+                "content": "依据您的病情，我们推荐您在【[日期] [开始时间]-[结束时间]】，前往【呼吸内科门诊 [医生姓名] 副主任医师】处进行就诊，您看是否可以？（如果所推荐挂号不符合您的预期，可以直接告诉我您的挂号要求，我将为您重新推荐。例如：“张三的号”、“主任的号”、“明天下午3点半的号”等。）"
+            }
+        ],
+        "prompt_version": "v3"
+    }
+}

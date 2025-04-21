@@ -18,7 +18,7 @@ import uvicorn
 import argparse
 
 import asyncio
-from fastapi import FastAPI, Query, Body, HTTPException
+from fastapi import FastAPI, Query, Body, HTTPException, Depends
 from fastapi.encoders import jsonable_encoder
 from openai import OpenAI, AsyncOpenAI
 from concurrent.futures import ThreadPoolExecutor
@@ -45,6 +45,11 @@ from diagnosis_treatment.doctor_medical_record_request_handler import DoctorMedi
 from diagnosis_treatment.prompt_factory import *
 from quality.quality_configs import QualityConfigs
 
+from follow_up.hospital_follow_up_data_models import FollowUpAPIRequest,FollowUpAPIResponse
+from follow_up.hospital_follow_up_request_handler import HospitalFollowUpRequestHandler
+
+from common.prompt_config import get_config, load_config
+
 def args_parser():
     parser = argparse.ArgumentParser(description='Chatbot Interface with Customizable Parameters')
     parser.add_argument('--model-url', type=str, default='http://localhost:8000/v1', help='Model URL')
@@ -57,6 +62,7 @@ def args_parser():
     parser.add_argument("--host", type=str, required=True)
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument('--quality', type=str, default="../data/raw/json/quality/quality.json", help='quality data')
+    parser.add_argument('--department-path', type=str, default="../data/raw/json/department/department.json", help='department path')
     parser.add_argument('--api-key', type=str, default='EMPTY', help='api key')
     args = parser.parse_args()
     return args
@@ -77,6 +83,28 @@ def thread_pool_executor(requestv, *receive, **kreceive):
     except NotImplementedError:
         pass  # Ignore if not implemented. Means this program is running in windows.
     return loop.run_in_executor(executor, requestv, *receive, **kreceive)
+
+
+async def process_follow_up(request_input, process_method, args, prompt_conf = None):
+    follow_up_obj = HospitalFollowUpRequestHandler(receive=request_input, args=args, prompt_conf=prompt_conf)
+    results = await process_method(follow_up_obj)
+    json_compatible_data = jsonable_encoder(results, exclude_none=True)
+    return JSONResponse(content=json_compatible_data)
+
+
+@app.post("/follow_up/questionnaire")
+async def follow_up_questionnaire(request_input: FollowUpAPIRequest, args=Depends(args_parser)):
+    return await process_follow_up(request_input, lambda obj: obj.process_to_generate_new_questionnaire(), args, get_config())
+
+
+@app.post("/follow_up/chat")
+async def follow_up_questionnaire(request_input: FollowUpAPIRequest, args=Depends(args_parser)):
+    return await process_follow_up(request_input, lambda obj: obj.process_to_generate_chat(), args, get_config())
+
+
+@app.post("/follow_up/report")
+async def follow_up_questionnaire(request_input: FollowUpAPIRequest, args=Depends(args_parser)):
+    return await process_follow_up(request_input, lambda obj: obj.process_to_generate_report(), args, get_config())
 
 
 @app.post("/quality_inspect")
@@ -158,7 +186,14 @@ executor = ThreadPoolExecutor(200) # max_workers = 1024
 log_name = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
 
 
+@app.on_event("startup")
+async def startup_event():
+    args = args_parser()
+    load_config()
+
+
 if __name__ == '__main__':
     freeze_support()
     args = args_parser()
+    prompt_conf = get_config()
     uvicorn.run(app="inference:app", host=args.host, port=args.port, timeout_keep_alive=30, workers=32,reload=False)

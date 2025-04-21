@@ -19,7 +19,8 @@ from .util_data_models import *
 from .util import *
 import io
 from fastapi.responses import StreamingResponse, JSONResponse
-
+from pydantic import ValidationError
+from fastapi import HTTPException
 
 class BasicMedicalRecordProcessChecker:
     def __init__(self, receive) -> None:
@@ -42,7 +43,10 @@ class BasicMedicalRecordRequestHandler(BaseDiagnosisRequestHandler):
                  request_type: None,
                  ):
         super().__init__(receive, args, scheme, sub_scheme,request_type)
-        self.receive = RequestV2(**receive)
+        try:
+            self.receive = RequestV2(**receive)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=e.errors())
 
     def checker_flag(self):
         self.checker = BasicMedicalRecordProcessChecker(self.receive)

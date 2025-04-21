@@ -1,0 +1,61 @@
+{
+    "input": {
+        "client_info": [
+            {
+                "patient": {
+                    "patient_name": "张三",
+                    "patient_gender": "男",
+                    "patient_age": "44",
+                    "if_child": "",
+                    "certificate_type": "",
+                    "certificate_number": "",
+                    "mobile_number": "",
+                    "current_address": {
+                        "province": "",
+                        "city": "",
+                        "district": "",
+                        "street": ""
+                    },
+                    "detailed_address": ""
+                },
+                "guardian": {
+                    "guardian_name": "",
+                    "certificate_type": "",
+                    "certificate_number": ""
+                }
+            }
+        ]
+    },
+    "output": {
+        "basic_medical_record": {
+            "chief_complaint": "发烧一天，嗓子疼",
+            "history_of_present_illness": "",
+            "past_medical_history": "",
+            "personal_history": "",
+            "allergy_history": "",
+            "physical_examination": {
+                "temperature": "",
+                "pulse": "",
+                "blood_pressure": "",
+                "respiration": ""
+            },
+            "auxiliary_examination": ""
+        },
+        "chosen_department": [
+            {
+                "department_id": "1f0f55bc398046ae05d0.101811.",
+                "department_name": "成人发热门诊"
+            },
+            {
+                "department_id": "5ae37e47016d46aa2073.101211.",
+                "department_name": "呼吸内科门诊"
+            }
+        ]
+    },
+    "chat": {
+        "historical_conversations_bak": [
+        ],
+        "historical_conversations": [
+        ]
+    }
+}

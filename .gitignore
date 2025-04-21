@@ -1,0 +1,28 @@
+# Python 字节码文件
+*.pyc
+
+# 缓存文件夹
+__pycache__/
+
+# 虚拟环境文件夹
+venv/
+.venv/
+env/
+
+# PyCharm 相关文件
+.idea/
+
+# VS Code 相关文件
+.vscode/
+
+# Sublime Text 相关文件
+*.sublime-workspace
+*.sublime-project
+
+# 日志文件
+*.log
+
+# 打包文件
+dist/
+build/
+*.egg-info/

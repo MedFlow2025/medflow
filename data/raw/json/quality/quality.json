@@ -74,7 +74,7 @@
             "content": "个人史内容",
             "field": "个人史;",
             "item": "",
-            "standard": "只要有内容且不为空就可以",
+            "standard": "只要有内容且不为空就可以。用户输入的‘无‘、’没有‘等认为正常输入。",
             "auto_modify_type": false,
             "auto_modify_info": "",
             "positive_example": "",

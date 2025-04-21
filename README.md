@@ -16,7 +16,6 @@ Qingnang Smart Diagnosis - MedFlow All - Process Medical Framework
   </a>
 
  | [English](README.md) | [中文](README_CN.md) |
-
 </div>
 
 

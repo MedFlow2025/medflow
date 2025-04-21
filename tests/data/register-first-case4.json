@@ -28,28 +28,124 @@
     "input": {
         "all_department": [
             {
-                "department_id": "101211",
+                "department_id": "001",
+                "department_name": "精神科门诊"
+            },
+            {
+                "department_id": "002",
+                "department_name": "神经内科门诊"
+            },
+            {
+                "department_id": "003",
+                "department_name": "内分泌科门诊"
+            },
+            {
+                "department_id": "004",
+                "department_name": "乳腺外科门诊"
+            },
+            {
+                "department_id": "005",
+                "department_name": "中医科门诊"
+            },
+            {
+                "department_id": "006",
+                "department_name": "耳鼻喉科门诊"
+            },
+            {
+                "department_id": "007",
+                "department_name": "消化内科门诊"
+            },
+            {
+                "department_id": "008",
+                "department_name": "口腔科门诊"
+            },
+            {
+                "department_id": "009",
+                "department_name": "产科门诊"
+            },
+            {
+                "department_id": "010",
+                "department_name": "男性科门诊"
+            },
+            {
+                "department_id": "011",
+                "department_name": "眼科门诊"
+            },
+            {
+                "department_id": "012",
+                "department_name": "妇科门诊"
+            },
+            {
+                "department_id": "013",
+                "department_name": "皮肤科门诊"
+            },
+            {
+                "department_id": "014",
+                "department_name": "甲状腺外科门诊"
+            },
+            {
+                "department_id": "015",
+                "department_name": "营养科门诊"
+            },
+            {
+                "department_id": "016",
+                "department_name": "血液科门诊"
+            },
+            {
+                "department_id": "017",
                 "department_name": "呼吸内科门诊"
             },
             {
-                "department_id": "101511",
+                "department_id": "018",
+                "department_name": "心胸外科门诊"
+            },
+            {
+                "department_id": "019",
+                "department_name": "神经外科门诊"
+            },
+            {
+                "department_id": "020",
+                "department_name": "泌尿外科门诊"
+            },
+            {
+                "department_id": "021",
+                "department_name": "肾内科门诊"
+            },
+            {
+                "department_id": "022",
                 "department_name": "风湿内科门诊"
             },
             {
-                "department_id": "131112",
+                "department_id": "023",
+                "department_name": "骨科门诊"
+            },
+            {
+                "department_id": "024",
+                "department_name": "康复医学科门诊"
+            },
+            {
+                "department_id": "025",
+                "department_name": "肛肠科门诊"
+            },
+            {
+                "department_id": "026",
                 "department_name": "儿科门诊"
             },
             {
-                "department_id": "3d81ac0e4a6246cec05b",
-                "department_name": "呼吸内科门诊（复诊云诊室）"
+                "department_id": "027",
+                "department_name": "消化内科门诊"
             },
             {
-                "department_id": "6b368148271e46aa76de",
-                "department_name": "内分泌科教学门诊"
+                "department_id": "028",
+                "department_name": "成人发热门诊"
             },
             {
-                "department_id": "0fedb8c03edf46b72dc9",
-                "department_name": "内分泌科门诊（复诊云诊室）"
+                "department_id": "029",
+                "department_name": "疼痛门诊"
+            },
+            {
+                "department_id": "030",
+                "department_name": "麻醉门诊"
             }
         ],
         "basic_medical_record": {
@@ -59,12 +155,17 @@
             "history_of_present_illness": "患者于半天前出现咳嗽，无痰，无胸痛，无发热，否认接触过感冒或者有呼吸道疾病的人，否认外出旅行或者到过人群密集的地方。",
             "past_medical_history": "否认高血压、糖尿病、心脏病、肝病、肾病等病史",
             "personal_history": "否认吸烟史；否认饮酒史",
-            "physical_examination": ""
+            "physical_examination": {
+                "temperature": "",
+                "pulse": "",
+                "blood_pressure": "",
+                "respiration": ""
+            }
         },
         "confirmed": null,
         "hospital_register": [
             {
-                "department_id": "101211",
+                "department_id": "017",
                 "department_name": "呼吸内科门诊",
                 "doctor_list": [
                     {
@@ -215,7 +316,7 @@
                                 ]
                             }
                         ],
-                        "doctor_id": "0600",
+                        "doctor_id": "D001",
                         "doctor_name": "梁永锋",
                         "doctor_title": "主任医师"
                     },
@@ -357,7 +458,7 @@
                                 ]
                             }
                         ],
-                        "doctor_id": "17096391104146af0bf1",
+                        "doctor_id": "D002",
                         "doctor_name": "王新发",
                         "doctor_title": "主治医师"
                     },
@@ -484,7 +585,7 @@
                                 ]
                             }
                         ],
-                        "doctor_id": "2447",
+                        "doctor_id": "D003",
                         "doctor_name": "甘振勇",
                         "doctor_title": "副主任医师"
                     }
@@ -495,7 +596,7 @@
     "output": {
         "chosen_department": [
             {
-                "department_id": "101211",
+                "department_id": "017",
                 "department_name": "呼吸内科门诊"
             }
         ],

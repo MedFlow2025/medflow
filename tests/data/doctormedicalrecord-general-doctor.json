@@ -1,0 +1,19 @@
+{
+    "input": {
+        "basic_medical_record": {
+            "chief_complaint": "",
+            "history_of_present_illness": "",
+            "past_medical_history": "高血压3年，规律服药",
+            "personal_history": "",
+            "allergy_history": "",
+            "physical_examination": {
+                "temperature": "37.2℃",
+                "pulse": "",
+                "blood_pressure": "129/89mmHg",
+                "respiration": ""
+            },
+            "auxiliary_examination": ""
+        },
+        "doctor_supplement": "患者头疼三天，浑身酸痛，口干舌燥喉咙不舒服，痰多，吃了感冒灵效果不明显，没有发烧，近期出去旅游，但没有吃特殊食物；没有过敏史，经常抽烟，一天一包，家族没有明显病史"
+    }
+}

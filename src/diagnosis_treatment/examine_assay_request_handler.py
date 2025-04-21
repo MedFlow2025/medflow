@@ -21,6 +21,8 @@ from .util_sqlite_function import *
 from .util import *
 import io
 from fastapi.responses import StreamingResponse, JSONResponse
+from pydantic import ValidationError
+from fastapi import HTTPException
 
 class ExamineAssayProcessChecker:
     def __init__(self) -> None:
@@ -38,7 +40,10 @@ class ExamineAssayRequestHandler(BaseDiagnosisRequestHandler):
                  request_type: None,
                  ):
         super().__init__(receive, args, scheme, sub_scheme,request_type)
-        self.receive = RequestV5(**receive)
+        try:
+            self.receive = RequestV5(**receive)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=e.errors())
         self.db_engine = create_engine(f"sqlite:///{self.args.database}/medical_assistant.db")
 
     def checker_flag(self):

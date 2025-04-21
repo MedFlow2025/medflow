@@ -12,9 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import json
+import yaml
+from jinja2 import Template
+from fastapi import HTTPException
+
 import collections
 VersionedPromptFactory = collections.defaultdict(dict)
-import json
 
 format_distribute="""[
     {
@@ -146,6 +151,36 @@ format_hospital_register="""[{
 """
 
 format_hospital_register_modify="""[{"科室名称": "","医生姓名": "","挂号日期": "","起始时间": "","终止时间": "","号源数量": ""}]"""
+
+REGISTER_MODEL_TYPE_BASE = "register_type_base"
+REGISTER_MODEL_TYPE_INTENTION = "register_type_intention"
+
+register_intention_json_str = '''
+{
+    "意图类型": "",
+    "科室名称": "",
+    "医生姓名": "",
+    "医生职称": "",
+    "日期": "",
+    "时间": "",
+    "号源": "",
+    "查询主体": "",
+    "优先级": ""
+}
+'''
+
+register_intention_field_mapping = {
+    "意图类型": "intention_tpye",
+    "科室名称": "department_name",
+    "医生姓名": "doctor_name",
+    "医生职称": "doctor_title",
+    "日期": "register_date",
+    "时间": "register_time",
+    "号源": "register_source",
+    "查询主体": "query_subject",
+    "优先级": "priority"
+}
+
 
 #诊断
 format_diagnose="""{
@@ -359,32 +394,9 @@ format_hospital_guide2="""{
 }
 """
 
-#文本生成病历
-format_doctor_medical_record_text="""{
-    "主诉": "",
-    "现病史": "",
-    "既往史": "",
-    "个人史": "",
-    "过敏史": "",
-    "体格检查": "",
-    "辅助检查": ""
-}
-"""
+gender_map={"男": "女", "女": "男"}
 
-#模板生成病历
-format_doctor_medical_record_template="""{
-    "主诉": "",
-    "现病史": "",
-    "既往史": "",
-    "个人史": "",
-    "过敏史": "",
-    "体格检查": "",
-    "辅助检查": "",
-    "专科检查": "",
-    "治疗": "",
-    "医嘱": ""
-}
-"""
+format_translate = {"原句":"", "翻译结果":""}
 
 medical_fields={
     "主诉":"chief_complaint",
@@ -397,6 +409,54 @@ medical_fields={
     "专科检查":"specialty_examination",
     "治疗":"cure",
     "医嘱":"doctor_advice"
+}
+reversed_medical_fields={v: k for k, v in medical_fields.items()}
+
+sub_medical_fields={
+    "体温":"temperature",
+    "脉搏":"pulse",
+    "血压":"blood_pressure",
+    "呼吸":"respiration"
+}
+reversed_sub_medical_fields={v: k for k, v in sub_medical_fields.items()}
+
+therapy_scheme_fields= {
+    "保守治疗": "default_therapy",
+    "手术治疗": "surgical_therapy",
+    "化疗": "chemo_therapy",
+    "放疗": "radiation_therapy",
+    "心理治疗": "psycho_therapy",
+    "康复治疗": "rehabilitation_therapy",
+    "物理治疗": "physical_therapy",
+    "替代疗法": "alternative_therapy",
+    "观察治疗": "observation_therapy"
+}
+reversed_therapy_scheme_fields={v: k for k, v in therapy_scheme_fields.items()}
+
+request_type_map={
+   "distribute": "v0",
+   "clientinfo": "v1",
+   "basicmedicalrecord": "v2",
+   "hospitalregister": "v3",
+   "diagnosis": "v4",
+   "examass": "v5",
+   "scheme": "v6",
+   "returnvisit": "v7",
+   "hospitalguide": "v8",
+   "doctormedicalrecord": "v9"
+}
+therapy_scheme_map={
+    "prescription": "default_therapy",
+    "transfusion": "default_therapy",
+    "disposition": "default_therapy",
+    "surgical": "other_therapy",
+    "chemo": "other_therapy",
+    "radiation": "other_therapy",
+    "psycho": "other_therapy",
+    "rehabilitation": "other_therapy",
+    "physical": "other_therapy",
+    "alternative": "other_therapy",
+    "observation": "other_therapy"
 }
 
 #问候语
@@ -432,7 +492,7 @@ stop_sign = [
     '生成治疗方法'
 ]
 
-format_new_regiter_info = "新挂号："
+format_new_regiter_info = "新挂号"
 format_register_first_info = "我们为您推荐如下预约就诊"
 
 class PromptTemplate():
@@ -461,8 +521,9 @@ class PromptTemplate():
         self.format_return_visit = format_return_visit
         self.format_hospital_guide1 = format_hospital_guide1
         self.format_hospital_guide2 = format_hospital_guide2
-        self.format_doctor_medical_record_text = format_doctor_medical_record_text
-        self.format_doctor_medical_record_template = format_doctor_medical_record_template
+        self.format_translate = format_translate
+        #self.format_doctor_medical_record_text = format_doctor_medical_record_text
+        #self.format_doctor_medical_record_template = format_doctor_medical_record_template
         self.format_new_regiter_info = format_new_regiter_info
 
     def set_prompt(self):
@@ -486,3 +547,26 @@ def get_prompt(scene: str, req, *args):
         print(f"Error not found version {ver} fallback to v1", flush=True)
         raise NotImplemented(f"not implement {ver} version in {scene} prompt")
     return VersionedPromptFactory[scene][ver](req, *args)
+
+class PromptManager:
+    def __init__(self, yaml_name):
+        try:
+            self.yaml_name = yaml_name
+            prompt_config_path = "./diagnosis_treatment/prompt_config"
+            yaml_path = os.path.join(os.getcwd(), prompt_config_path, yaml_name)
+            with open(yaml_path, 'r', encoding='utf-8') as f:
+                self.data = yaml.safe_load(f)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"YAML file '{yaml_name}' not found in path '{prompt_config_path}'")
+        except yaml.YAMLError as e:
+            raise HTTPException(status_code=422, detail=f"Error parsing YAML file: {yaml_name}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Unexpected error loading YAML: {e}")
+
+    def get_prompt(self, category, index, variables):
+        try:
+            template_str = self.data["prompts"][category][index]['prompt']
+            template = Template(template_str)
+            return template.render(**variables)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Unexpected error getting prompt: {e}")

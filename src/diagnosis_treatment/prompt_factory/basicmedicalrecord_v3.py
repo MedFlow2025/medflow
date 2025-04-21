@@ -23,14 +23,13 @@ class PromptBasicMedicalRecord_v3(PromptTemplate):
 
     def set_prompt(self):
         self.prompt = {
-            "21": self.__set_chief_complaint(),
-            "2": self.__set_basic_medical_record()
+            "21": self.__set_collect_record(),
+            "2": self.__set_modify_record()
         }
         return self.prompt
 
-    def __set_chief_complaint(self):
+    def __set_collect_record(self):
         #21-对话生成病历
-        gender_map={"男": "女", "女": "男"}
         system_str=f"""#Role:
 医生助理
 ## Profile
@@ -70,7 +69,7 @@ class PromptBasicMedicalRecord_v3(PromptTemplate):
 当前患者的姓名是“{self.ci_p.patient_name}”，性别是“{self.ci_p.patient_gender}”，年龄是“{self.ci_p.patient_age}”，按<Workflow>的顺序和患者对话。"""
         return system_str, None
 
-    def __set_basic_medical_record(self):
+    def __set_modify_record(self):
         #2-按患者要求修改病历
         system_str=f"""#Role:
 医生助理

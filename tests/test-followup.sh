@@ -1,0 +1,2003 @@
+ip=$1
+port=$2
+
+# 检查是否提供了足够的参数
+if [ -z "$ip" ] || [ -z "$port" ]; then
+    echo "错误：请提供 IP 地址和端口号作为参数。"
+    echo "用法：$0 <IP地址> <端口号>"
+    exit 1
+fi
+
+url="http://$ip:$port/follow_up/questionnaire"
+
+
+curl -X 'POST' \
+  $url \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d @data/followup-generate-questions.json
+echo -e "\n==================================\n"
+
+
+url="http://$ip:$port/follow_up/chat"
+curl -X 'POST' \
+  $url \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d @data/followup-chat-first.json
+echo -e "\n==================================\n"
+
+
+curl -X 'POST' \
+  $url \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d @data/followup-chat-middle.json
+echo -e "\n==================================\n"
+
+
+curl -X 'POST' \
+  $url \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d @data/followup-chat-finish.json
+echo -e "\n==================================\n"
+
+
+url="http://$ip:$port/follow_up/report"
+curl -X 'POST' \
+  $url \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d @data/followup-report.json
+echo -e "\n==================================\n"
+
+# 返回值参考  followup-generate-questions.json
+# {
+#     "output": {
+#         "questionsList": [
+#             {
+#                 "questionId": "1",
+#                 "questionContent": "近期您身体有以下不适症状吗？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "无明显症状"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "胸痛/胸闷"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "肌肉酸痛"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "心悸"
+#                     },
+#                     {
+#                         "questionOptionId": "E",
+#                         "questionOptionContent": "呼吸困难"
+#                     }
+#                 ],
+#                 "questionRelation": "2"
+#             },
+#             {
+#                 "questionId": "2",
+#                 "questionContent": "问题1出现以上的症状是在那种情况下出现？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "休息时都有"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "日常活动感觉不明显"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "日常活动感觉明显"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "3",
+#                 "questionContent": "近期您的身体有出血的情况吗？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "没有"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "有"
+#                     }
+#                 ],
+#                 "questionRelation": "4"
+#             },
+#             {
+#                 "questionId": "4",
+#                 "questionContent": "如果有，请告知出现部位是哪里？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "皮肤、口腔粘膜出血"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "黑便或者血便"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "血尿"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "咳血"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "5",
+#                 "questionContent": "您最近有测量体重吗？请说出体重数字______",
+#                 "questionType": "填空题"
+#             },
+#             {
+#                 "questionId": "6",
+#                 "questionContent": "您的运动情况怎样？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "规律运动"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "不规律运动"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "7",
+#                 "questionContent": "出院后睡眠质量如何？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "睡眠质量良好"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "失眠"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "易醒"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "犯困"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "8",
+#                 "questionContent": "出院后情绪状态如何？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "心情愉快"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "焦虑"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "抑郁"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "暴躁"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "9",
+#                 "questionContent": "自获得此病以来，您目前的工作承受能力如何？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "正常"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "轻度受限制"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "严重受限"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "卧床为主"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "10",
+#                 "questionContent": "您现在的饮食习惯如何？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "清淡"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "偏咸"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "辛辣"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "肥腻"
+#                     },
+#                     {
+#                         "questionOptionId": "E",
+#                         "questionOptionContent": "喜甜"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "11",
+#                 "questionContent": "目前您有无吸烟的情况？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "不吸烟"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "仍在吸烟"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "正在戒烟"
+#                     }
+#                 ],
+#                 "questionRelation": "12,13"
+#             },
+#             {
+#                 "questionId": "12",
+#                 "questionContent": "如果有吸烟，请告知每天吸烟数量是多少支？",
+#                 "questionType": "填空题"
+#             },
+#             {
+#                 "questionId": "13",
+#                 "questionContent": "如果您已经戒烟，已戒烟了多长时间？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "住院时开始戒烟"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "戒烟不到半年"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "戒烟已超过半年"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "14",
+#                 "questionContent": "目前您的饮酒情况怎样？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "从不饮酒"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "有饮酒"
+#                     }
+#                 ],
+#                 "questionRelation": "15,16"
+#             },
+#             {
+#                 "questionId": "15",
+#                 "questionContent": "如果有饮酒，您常喝开的是哪种酒？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "白酒"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "红酒"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "啤酒"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "16",
+#                 "questionContent": "请告知每天饮酒的量是多少ml？",
+#                 "questionType": "填空题"
+#             },
+#             {
+#                 "questionId": "17",
+#                 "questionContent": "您是否能坚持按照医嘱规律服用心脏相关药物？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "是"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "否"
+#                     }
+#                 ],
+#                 "questionRelation": "18"
+#             },
+#             {
+#                 "questionId": "18",
+#                 "questionContent": "如果没有，您能告诉我原因吗？",
+#                 "questionType": "填空题"
+#             }
+#         ],
+#         "chat": [],
+#         "questionsListTransformByLLM": "\n\n1. 最近身体有没有什么不舒服的地方？比如胸痛、胸闷、肌肉酸痛、心悸或者呼吸困难？\n2. 如果有这些症状，是在什么情况下出现的？是休息的时候也有，还是日常活动的时候感觉不明显，还是日常活动的时候感觉明显？\n3. 最近身体有没有出血的情况？比如皮肤、口腔粘膜出血，黑便或者血便，血尿，咳血？\n4. 最近有测量过体重吗？体重是多少？\n5. 最近的运动情况怎么样？是规律运动，还是不规律运动？\n6. 出院后的睡眠质量怎么样？是睡得挺香的，还是有时候会睡不着，或者容易醒，或者总是觉得困？\n7. 出院后的情绪状态怎么样？是心情愉快，还是有时候会感到焦虑、抑郁，或者容易暴躁？\n8. 自从得了这个病以来，目前的工作承受能力怎么样？是正常，还是轻度受限制，还是严重受限，甚至卧床为主？\n9. 现在的饮食习惯怎么样？是清淡，还是偏咸，辛辣，肥腻，还是喜甜？\n10. 目前有吸烟的情况吗？是不吸烟，还是仍在吸烟，或者正在戒烟？\n11. 如果有吸烟，每天吸烟的数量是多少支？\n12. 如果已经戒烟，已经戒烟了多长时间？是住院时开始戒烟，还是戒烟不到半年，还是戒烟已超过半年？\n13. 目前的饮酒情况怎么样？是从不饮酒，还是有饮酒？\n14. 如果有饮酒，常喝的是哪种酒？是白酒，红酒，还是啤酒？\n15. 每天饮酒的量是多少ml？\n16. 能坚持按照医嘱规律服用心脏相关药物吗？是能，还是不能？\n17. 如果不能，能告诉我原因吗？",
+#         "questionName": "胸痛患者AI智能随访问卷",
+#         "qId": "Q001"
+#     }
+# }
+
+
+# 返回值参考  followup-chat-first.json
+# {
+#     "output": {
+#         "questionsList": [
+#             {
+#                 "questionId": "1",
+#                 "questionContent": "近期您身体有以下不适症状吗？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "无明显症状"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "胸痛/胸闷"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "肌肉酸痛"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "心悸"
+#                     },
+#                     {
+#                         "questionOptionId": "E",
+#                         "questionOptionContent": "呼吸困难"
+#                     }
+#                 ],
+#                 "questionRelation": "2"
+#             },
+#             {
+#                 "questionId": "2",
+#                 "questionContent": "问题1出现以上的症状是在那种情况下出现？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "休息时都有"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "日常活动感觉不明显"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "日常活动感觉明显"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "3",
+#                 "questionContent": "近期您的身体有出血的情况吗？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "没有"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "有"
+#                     }
+#                 ],
+#                 "questionRelation": "4"
+#             },
+#             {
+#                 "questionId": "4",
+#                 "questionContent": "如果有，请告知出现部位是哪里？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "皮肤、口腔粘膜出血"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "黑便或者血便"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "血尿"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "咳血"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "5",
+#                 "questionContent": "您最近有测量体重吗？请说出体重数字______",
+#                 "questionType": "填空题"
+#             },
+#             {
+#                 "questionId": "6",
+#                 "questionContent": "您的运动情况怎样？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "规律运动"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "不规律运动"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "7",
+#                 "questionContent": "出院后睡眠质量如何？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "睡眠质量良好"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "失眠"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "易醒"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "犯困"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "8",
+#                 "questionContent": "出院后情绪状态如何？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "心情愉快"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "焦虑"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "抑郁"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "暴躁"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "9",
+#                 "questionContent": "自获得此病以来，您目前的工作承受能力如何？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "正常"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "轻度受限制"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "严重受限"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "卧床为主"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "10",
+#                 "questionContent": "您现在的饮食习惯如何？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "清淡"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "偏咸"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "辛辣"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "肥腻"
+#                     },
+#                     {
+#                         "questionOptionId": "E",
+#                         "questionOptionContent": "喜甜"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "11",
+#                 "questionContent": "目前您有无吸烟的情况？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "不吸烟"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "仍在吸烟"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "正在戒烟"
+#                     }
+#                 ],
+#                 "questionRelation": "12,13"
+#             },
+#             {
+#                 "questionId": "12",
+#                 "questionContent": "如果有吸烟，请告知每天吸烟数量是多少支？",
+#                 "questionType": "填空题"
+#             },
+#             {
+#                 "questionId": "13",
+#                 "questionContent": "如果您已经戒烟，已戒烟了多长时间？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "住院时开始戒烟"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "戒烟不到半年"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "戒烟已超过半年"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "14",
+#                 "questionContent": "目前您的饮酒情况怎样？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "从不饮酒"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "有饮酒"
+#                     }
+#                 ],
+#                 "questionRelation": "15,16"
+#             },
+#             {
+#                 "questionId": "15",
+#                 "questionContent": "如果有饮酒，您常喝开的是哪种酒？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "白酒"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "红酒"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "啤酒"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "16",
+#                 "questionContent": "请告知每天饮酒的量是多少ml？",
+#                 "questionType": "填空题"
+#             },
+#             {
+#                 "questionId": "17",
+#                 "questionContent": "您是否能坚持按照医嘱规律服用心脏相关药物？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "是"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "否"
+#                     }
+#                 ],
+#                 "questionRelation": "18"
+#             },
+#             {
+#                 "questionId": "18",
+#                 "questionContent": "如果没有，您能告诉我原因吗？",
+#                 "questionType": "填空题"
+#             }
+#         ],
+#         "chat": [
+#             {
+#                 "role": "system",
+#                 "content": "您好，我是您的随访助手，希望您最近身体状况良好。我将通过一系列问题来了解您的健康状况，以便为您提供更好的帮助。首先，我想了解一下，最近您的身体有没有什么不舒服的地方？比如胸痛、胸闷、肌肉酸痛、心悸或者呼吸困难？"
+#             }
+#         ],
+#         "questionsListTransformByLLM": "\n\n1. 最近身体有没有什么不舒服的地方？比如胸痛、胸闷、肌肉酸痛、心悸或者呼吸困难？\n2. 如果有这些症状，是在什么情况下出现的？是休息的时候也有，还是日常活动的时候感觉不明显，还是日常活动的时候感觉明显？\n3. 最近身体有没有出血的情况？比如皮肤、口腔粘膜出血，黑便或者血便，血尿，咳血？\n4. 最近有测量过体重吗？体重是多少？\n5. 最近的运动情况怎么样？是规律运动，还是不规律运动？\n6. 出院后的睡眠质量怎么样？是睡得挺香的，还是有时候会睡不着，或者容易醒，或者总是觉得困？\n7. 出院后的情绪状态怎么样？是心情愉快，还是有时候会感到焦虑、抑郁，或者容易暴躁？\n8. 自从得了这个病以来，目前的工作承受能力怎么样？是正常，还是轻度受限制，还是严重受限，甚至卧床为主？\n9. 现在的饮食习惯怎么样？是清淡，还是偏咸，辛辣，肥腻，还是喜甜？\n10. 目前有吸烟的情况吗？是不吸烟，还是仍在吸烟，或者正在戒烟？\n11. 如果有吸烟，每天吸烟的数量是多少支？\n12. 如果已经戒烟，已经戒烟了多长时间？是住院时开始戒烟，还是戒烟不到半年，还是戒烟已超过半年？\n13. 目前的饮酒情况怎么样？是从不饮酒，还是有饮酒？\n14. 如果有饮酒，常喝的是哪种酒？是白酒，红酒，还是啤酒？\n15. 每天饮酒的量是多少ml？\n16. 能坚持按照医嘱规律服用心脏相关药物吗？是能，还是不能？\n17. 如果不能，能告诉我原因吗？",
+#         "questionName": "胸痛患者AI智能随访问卷",
+#         "qId": "Q001"
+#     }
+# }
+
+
+# 返回值参考  followup-chat-middle.json
+# {
+#     "output": {
+#         "questionsList": [
+#             {
+#                 "questionId": "1",
+#                 "questionContent": "近期您身体有以下不适症状吗？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "无明显症状"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "胸痛/胸闷"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "肌肉酸痛"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "心悸"
+#                     },
+#                     {
+#                         "questionOptionId": "E",
+#                         "questionOptionContent": "呼吸困难"
+#                     }
+#                 ],
+#                 "questionRelation": "2"
+#             },
+#             {
+#                 "questionId": "2",
+#                 "questionContent": "问题1出现以上的症状是在那种情况下出现？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "休息时都有"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "日常活动感觉不明显"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "日常活动感觉明显"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "3",
+#                 "questionContent": "近期您的身体有出血的情况吗？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "没有"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "有"
+#                     }
+#                 ],
+#                 "questionRelation": "4"
+#             },
+#             {
+#                 "questionId": "4",
+#                 "questionContent": "如果有，请告知出现部位是哪里？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "皮肤、口腔粘膜出血"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "黑便或者血便"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "血尿"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "咳血"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "5",
+#                 "questionContent": "您最近有测量体重吗？请说出体重数字______",
+#                 "questionType": "填空题"
+#             },
+#             {
+#                 "questionId": "6",
+#                 "questionContent": "您的运动情况怎样？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "规律运动"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "不规律运动"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "7",
+#                 "questionContent": "出院后睡眠质量如何？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "睡眠质量良好"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "失眠"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "易醒"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "犯困"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "8",
+#                 "questionContent": "出院后情绪状态如何？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "心情愉快"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "焦虑"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "抑郁"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "暴躁"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "9",
+#                 "questionContent": "自获得此病以来，您目前的工作承受能力如何？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "正常"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "轻度受限制"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "严重受限"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "卧床为主"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "10",
+#                 "questionContent": "您现在的饮食习惯如何？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "清淡"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "偏咸"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "辛辣"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "肥腻"
+#                     },
+#                     {
+#                         "questionOptionId": "E",
+#                         "questionOptionContent": "喜甜"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "11",
+#                 "questionContent": "目前您有无吸烟的情况？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "不吸烟"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "仍在吸烟"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "正在戒烟"
+#                     }
+#                 ],
+#                 "questionRelation": "12,13"
+#             },
+#             {
+#                 "questionId": "12",
+#                 "questionContent": "如果有吸烟，请告知每天吸烟数量是多少支？",
+#                 "questionType": "填空题"
+#             },
+#             {
+#                 "questionId": "13",
+#                 "questionContent": "如果您已经戒烟，已戒烟了多长时间？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "住院时开始戒烟"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "戒烟不到半年"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "戒烟已超过半年"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "14",
+#                 "questionContent": "目前您的饮酒情况怎样？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "从不饮酒"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "有饮酒"
+#                     }
+#                 ],
+#                 "questionRelation": "15,16"
+#             },
+#             {
+#                 "questionId": "15",
+#                 "questionContent": "如果有饮酒，您常喝开的是哪种酒？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "白酒"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "红酒"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "啤酒"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "16",
+#                 "questionContent": "请告知每天饮酒的量是多少ml？",
+#                 "questionType": "填空题"
+#             },
+#             {
+#                 "questionId": "17",
+#                 "questionContent": "您是否能坚持按照医嘱规律服用心脏相关药物？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "是"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "否"
+#                     }
+#                 ],
+#                 "questionRelation": "18"
+#             },
+#             {
+#                 "questionId": "18",
+#                 "questionContent": "如果没有，您能告诉我原因吗？",
+#                 "questionType": "填空题"
+#             }
+#         ],
+#         "chat": [
+#             {
+#                 "role": "system",
+#                 "content": "您好，我是您的随访助手，希望您最近身体状况良好。我将通过一系列问题来了解您的健康状况，这些问题将帮助我们更好地为您提供服务。首先，我想了解一下，最近您的身体有没有什么不舒服的地方？比如胸痛、胸闷、肌肉酸痛、心悸或者呼吸困难？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "没有。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "好的，那我们继续下一个问题。最近身体有没有出血的情况？比如皮肤、口腔粘膜出血，黑便或者血便，血尿，咳血？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "没有。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "好的，接下来我想了解一下您的体重情况。您最近有测量过体重吗？体重是多少？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "最近没称，大概70公斤。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "了解了，那最近的运动情况怎么样？是规律运动，还是不规律运动？"
+#             }
+#         ],
+#         "questionsListTransformByLLM": "\n\n1. 最近身体有没有什么不舒服的地方？比如胸痛、胸闷、肌肉酸痛、心悸或者呼吸困难？\n2. 如果有这些症状，是在什么情况下出现的？是休息的时候也有，还是日常活动的时候感觉不明显，还是日常活动的时候感觉明显？\n3. 最近身体有没有出血的情况？比如皮肤、口腔粘膜出血，黑便或者血便，血尿，咳血？\n4. 最近有测量过体重吗？体重是多少？\n5. 最近的运动情况怎么样？是规律运动，还是不规律运动？\n6. 出院后的睡眠质量怎么样？是睡得挺香的，还是有时候会睡不着，或者容易醒，或者总是觉得困？\n7. 出院后的情绪状态怎么样？是心情愉快，还是有时候会感到焦虑、抑郁，或者容易暴躁？\n8. 自从得了这个病以来，目前的工作承受能力怎么样？是正常，还是轻度受限制，还是严重受限，甚至卧床为主？\n9. 现在的饮食习惯怎么样？是清淡，还是偏咸，辛辣，肥腻，还是喜甜？\n10. 目前有吸烟的情况吗？是不吸烟，还是仍在吸烟，或者正在戒烟？\n11. 如果有吸烟，每天吸烟的数量是多少支？\n12. 如果已经戒烟，已经戒烟了多长时间？是住院时开始戒烟，还是戒烟不到半年，还是戒烟已超过半年？\n13. 目前的饮酒情况怎么样？是从不饮酒，还是有饮酒？\n14. 如果有饮酒，常喝的是哪种酒？是白酒，红酒，还是啤酒？\n15. 每天饮酒的量是多少ml？\n16. 能坚持按照医嘱规律服用心脏相关药物吗？是能，还是不能？\n17. 如果不能，能告诉我原因吗？",
+#         "questionName": "胸痛患者AI智能随访问卷",
+#         "qId": "Q001"
+#     }
+# }
+
+
+
+# 返回值参考  followup-chat-finish.json
+# {
+#     "output": {
+#         "questionsList": [
+#             {
+#                 "questionId": "1",
+#                 "questionContent": "近期您身体有以下不适症状吗？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "无明显症状"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "胸痛/胸闷"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "肌肉酸痛"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "心悸"
+#                     },
+#                     {
+#                         "questionOptionId": "E",
+#                         "questionOptionContent": "呼吸困难"
+#                     }
+#                 ],
+#                 "questionRelation": "2"
+#             },
+#             {
+#                 "questionId": "2",
+#                 "questionContent": "问题1出现以上的症状是在那种情况下出现？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "休息时都有"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "日常活动感觉不明显"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "日常活动感觉明显"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "3",
+#                 "questionContent": "近期您的身体有出血的情况吗？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "没有"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "有"
+#                     }
+#                 ],
+#                 "questionRelation": "4"
+#             },
+#             {
+#                 "questionId": "4",
+#                 "questionContent": "如果有，请告知出现部位是哪里？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "皮肤、口腔粘膜出血"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "黑便或者血便"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "血尿"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "咳血"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "5",
+#                 "questionContent": "您最近有测量体重吗？请说出体重数字______",
+#                 "questionType": "填空题"
+#             },
+#             {
+#                 "questionId": "6",
+#                 "questionContent": "您的运动情况怎样？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "规律运动"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "不规律运动"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "7",
+#                 "questionContent": "出院后睡眠质量如何？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "睡眠质量良好"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "失眠"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "易醒"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "犯困"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "8",
+#                 "questionContent": "出院后情绪状态如何？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "心情愉快"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "焦虑"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "抑郁"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "暴躁"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "9",
+#                 "questionContent": "自获得此病以来，您目前的工作承受能力如何？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "正常"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "轻度受限制"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "严重受限"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "卧床为主"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "10",
+#                 "questionContent": "您现在的饮食习惯如何？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "清淡"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "偏咸"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "辛辣"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "肥腻"
+#                     },
+#                     {
+#                         "questionOptionId": "E",
+#                         "questionOptionContent": "喜甜"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "11",
+#                 "questionContent": "目前您有无吸烟的情况？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "不吸烟"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "仍在吸烟"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "正在戒烟"
+#                     }
+#                 ],
+#                 "questionRelation": "12,13"
+#             },
+#             {
+#                 "questionId": "12",
+#                 "questionContent": "如果有吸烟，请告知每天吸烟数量是多少支？",
+#                 "questionType": "填空题"
+#             },
+#             {
+#                 "questionId": "13",
+#                 "questionContent": "如果您已经戒烟，已戒烟了多长时间？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "住院时开始戒烟"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "戒烟不到半年"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "戒烟已超过半年"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "14",
+#                 "questionContent": "目前您的饮酒情况怎样？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "从不饮酒"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "有饮酒"
+#                     }
+#                 ],
+#                 "questionRelation": "15,16"
+#             },
+#             {
+#                 "questionId": "15",
+#                 "questionContent": "如果有饮酒，您常喝开的是哪种酒？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "白酒"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "红酒"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "啤酒"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "16",
+#                 "questionContent": "请告知每天饮酒的量是多少ml？",
+#                 "questionType": "填空题"
+#             },
+#             {
+#                 "questionId": "17",
+#                 "questionContent": "您是否能坚持按照医嘱规律服用心脏相关药物？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "是"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "否"
+#                     }
+#                 ],
+#                 "questionRelation": "18"
+#             },
+#             {
+#                 "questionId": "18",
+#                 "questionContent": "如果没有，您能告诉我原因吗？",
+#                 "questionType": "填空题"
+#             }
+#         ],
+#         "chat": [
+#             {
+#                 "role": "system",
+#                 "content": "您好，我是您的随访助手，希望您最近身体状况良好。我将通过一系列问题来了解您的健康状况，这些问题将帮助我们更好地为您提供服务。首先，我想了解一下，最近您的身体有没有什么不舒服的地方？比如胸痛、胸闷、肌肉酸痛、心悸或者呼吸困难？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "没有。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "好的，那我们继续下一个问题。最近身体有没有出血的情况？比如皮肤、口腔粘膜出血，黑便或者血便，血尿，咳血？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "没有。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "好的，接下来我想了解一下您的体重情况。您最近有测量过体重吗？体重是多少？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "最近没称，大概70公斤。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "好的，了解了。接下来想了解一下您的运动情况，您最近的运动情况怎么样？是规律运动，还是不规律运动？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "偶尔运动一下。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "好的，了解了。那么，出院后的睡眠质量怎么样？是睡得挺香的，还是有时候会睡不着，或者容易醒，或者总是觉得困？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "基本跟之前一样，偶尔会睡不着。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "了解了，那您出院后的情绪状态怎么样？是心情愉快，还是有时候会感到焦虑、抑郁，或者容易暴躁？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "状态挺好。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "好的，了解了。接下来的问题是：自从得了这个病以来，目前的工作承受能力怎么样？是正常，还是轻度受限制，还是严重受限，甚至卧床为主？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "目前轻度受限吧，工作久了容易累。后面可能会好点。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "了解了，那您的饮食习惯怎么样？是清淡，还是偏咸，辛辣，肥腻，还是喜甜？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "一般清淡为主，或者偏甜。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "了解了，您目前的饮食习惯是清淡为主，偶尔偏甜。那么，您目前有吸烟的情况吗？是不吸烟，还是仍在吸烟，或者正在戒烟？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "现在不抽了。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "了解了，您是住院时开始戒烟的吗？还是戒烟不到半年，还是戒烟已超过半年？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "戒烟不到半年。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "了解了，您现在不饮酒吗？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "偶尔喝点啤酒、白酒。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "每天喝多少毫升呢？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "啤酒一瓶左右，白酒1两吧。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "了解了，您能坚持按照医嘱规律服用心脏相关药物吗？是能，还是不能？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "坚持规律服药。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "问卷已经完成。"
+#             }
+#         ],
+#         "questionsListTransformByLLM": "\n\n1. 最近身体有没有什么不舒服的地方？比如胸痛、胸闷、肌肉酸痛、心悸或者呼吸困难？\n2. 如果有这些症状，是在什么情况下出现的？是休息的时候也有，还是日常活动的时候感觉不明显，还是日常活动的时候感觉明显？\n3. 最近身体有没有出血的情况？比如皮肤、口腔粘膜出血，黑便或者血便，血尿，咳血？\n4. 最近有测量过体重吗？体重是多少？\n5. 最近的运动情况怎么样？是规律运动，还是不规律运动？\n6. 出院后的睡眠质量怎么样？是睡得挺香的，还是有时候会睡不着，或者容易醒，或者总是觉得困？\n7. 出院后的情绪状态怎么样？是心情愉快，还是有时候会感到焦虑、抑郁，或者容易暴躁？\n8. 自从得了这个病以来，目前的工作承受能力怎么样？是正常，还是轻度受限制，还是严重受限，甚至卧床为主？\n9. 现在的饮食习惯怎么样？是清淡，还是偏咸，辛辣，肥腻，还是喜甜？\n10. 目前有吸烟的情况吗？是不吸烟，还是仍在吸烟，或者正在戒烟？\n11. 如果有吸烟，每天吸烟的数量是多少支？\n12. 如果已经戒烟，已经戒烟了多长时间？是住院时开始戒烟，还是戒烟不到半年，还是戒烟已超过半年？\n13. 目前的饮酒情况怎么样？是从不饮酒，还是有饮酒？\n14. 如果有饮酒，常喝的是哪种酒？是白酒，红酒，还是啤酒？\n15. 每天饮酒的量是多少ml？\n16. 能坚持按照医嘱规律服用心脏相关药物吗？是能，还是不能？\n17. 如果不能，能告诉我原因吗？",
+#         "questionName": "胸痛患者AI智能随访问卷",
+#         "qId": "Q001"
+#     }
+# }
+
+
+# 返回值参考  followup-report.json
+# {
+#     "output": {
+#         "questionsList": [
+#             {
+#                 "questionId": "1",
+#                 "questionContent": "近期您身体有以下不适症状吗？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "无明显症状"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "胸痛/胸闷"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "肌肉酸痛"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "心悸"
+#                     },
+#                     {
+#                         "questionOptionId": "E",
+#                         "questionOptionContent": "呼吸困难"
+#                     }
+#                 ],
+#                 "questionRelation": "2",
+#                 "questionAnswer": [
+#                     {
+#                         "questionAnswerId": "A",
+#                         "questionAnswerContent": "无明显症状"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "2",
+#                 "questionContent": "问题1出现以上的症状是在那种情况下出现？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "休息时都有"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "日常活动感觉不明显"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "日常活动感觉明显"
+#                     }
+#                 ],
+#                 "questionAnswer": [
+#                     {
+#                         "questionAnswerId": "B",
+#                         "questionAnswerContent": "日常活动感觉不明显"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "3",
+#                 "questionContent": "近期您的身体有出血的情况吗？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "没有"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "有"
+#                     }
+#                 ],
+#                 "questionRelation": "4",
+#                 "questionAnswer": [
+#                     {
+#                         "questionAnswerId": "A",
+#                         "questionAnswerContent": "没有"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "4",
+#                 "questionContent": "如果有，请告知出现部位是哪里？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "皮肤、口腔粘膜出血"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "黑便或者血便"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "血尿"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "咳血"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "5",
+#                 "questionContent": "您最近有测量体重吗？请说出体重数字______",
+#                 "questionType": "填空题",
+#                 "questionAnswer": [
+#                     {
+#                         "questionAnswerId": "A",
+#                         "questionAnswerContent": "70公斤"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "6",
+#                 "questionContent": "您的运动情况怎样？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "规律运动"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "不规律运动"
+#                     }
+#                 ],
+#                 "questionAnswer": [
+#                     {
+#                         "questionAnswerId": "B",
+#                         "questionAnswerContent": "不规律运动"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "7",
+#                 "questionContent": "出院后睡眠质量如何？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "睡眠质量良好"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "失眠"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "易醒"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "犯困"
+#                     }
+#                 ],
+#                 "questionAnswer": [
+#                     {
+#                         "questionAnswerId": "B",
+#                         "questionAnswerContent": "失眠"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "8",
+#                 "questionContent": "出院后情绪状态如何？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "心情愉快"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "焦虑"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "抑郁"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "暴躁"
+#                     }
+#                 ],
+#                 "questionAnswer": [
+#                     {
+#                         "questionAnswerId": "A",
+#                         "questionAnswerContent": "心情愉快"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "9",
+#                 "questionContent": "自获得此病以来，您目前的工作承受能力如何？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "正常"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "轻度受限制"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "严重受限"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "卧床为主"
+#                     }
+#                 ],
+#                 "questionAnswer": [
+#                     {
+#                         "questionAnswerId": "B",
+#                         "questionAnswerContent": "轻度受限制"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "10",
+#                 "questionContent": "您现在的饮食习惯如何？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "清淡"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "偏咸"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "辛辣"
+#                     },
+#                     {
+#                         "questionOptionId": "D",
+#                         "questionOptionContent": "肥腻"
+#                     },
+#                     {
+#                         "questionOptionId": "E",
+#                         "questionOptionContent": "喜甜"
+#                     }
+#                 ],
+#                 "questionAnswer": [
+#                     {
+#                         "questionAnswerId": "A",
+#                         "questionAnswerContent": "或者偏甜"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "11",
+#                 "questionContent": "目前您有无吸烟的情况？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "不吸烟"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "仍在吸烟"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "正在戒烟"
+#                     }
+#                 ],
+#                 "questionRelation": "12,13",
+#                 "questionAnswer": [
+#                     {
+#                         "questionAnswerId": "A",
+#                         "questionAnswerContent": "不吸烟"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "12",
+#                 "questionContent": "如果有吸烟，请告知每天吸烟数量是多少支？",
+#                 "questionType": "填空题"
+#             },
+#             {
+#                 "questionId": "13",
+#                 "questionContent": "如果您已经戒烟，已戒烟了多长时间？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "住院时开始戒烟"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "戒烟不到半年"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "戒烟已超过半年"
+#                     }
+#                 ],
+#                 "questionAnswer": [
+#                     {
+#                         "questionAnswerId": "B",
+#                         "questionAnswerContent": "戒烟不到半年"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "14",
+#                 "questionContent": "目前您的饮酒情况怎样？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "从不饮酒"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "有饮酒"
+#                     }
+#                 ],
+#                 "questionRelation": "15,16",
+#                 "questionAnswer": [
+#                     {
+#                         "questionAnswerId": "B",
+#                         "questionAnswerContent": "有饮酒"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "15",
+#                 "questionContent": "如果有饮酒，您常喝开的是哪种酒？",
+#                 "questionType": "多选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "白酒"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "红酒"
+#                     },
+#                     {
+#                         "questionOptionId": "C",
+#                         "questionOptionContent": "啤酒"
+#                     }
+#                 ],
+#                 "questionAnswer": [
+#                     {
+#                         "questionAnswerId": "C",
+#                         "questionAnswerContent": "啤酒"
+#                     },
+#                     {
+#                         "questionAnswerId": "A",
+#                         "questionAnswerContent": "白酒"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "16",
+#                 "questionContent": "请告知每天饮酒的量是多少ml？",
+#                 "questionType": "填空题",
+#                 "questionAnswer": [
+#                     {
+#                         "questionAnswerId": "A",
+#                         "questionAnswerContent": "啤酒一瓶左右"
+#                     },
+#                     {
+#                         "questionAnswerId": "B",
+#                         "questionAnswerContent": "白酒1两"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "17",
+#                 "questionContent": "您是否能坚持按照医嘱规律服用心脏相关药物？",
+#                 "questionType": "单选题",
+#                 "questionOptions": [
+#                     {
+#                         "questionOptionId": "A",
+#                         "questionOptionContent": "是"
+#                     },
+#                     {
+#                         "questionOptionId": "B",
+#                         "questionOptionContent": "否"
+#                     }
+#                 ],
+#                 "questionRelation": "18",
+#                 "questionAnswer": [
+#                     {
+#                         "questionAnswerId": "A",
+#                         "questionAnswerContent": "是"
+#                     }
+#                 ]
+#             },
+#             {
+#                 "questionId": "18",
+#                 "questionContent": "如果没有，您能告诉我原因吗？",
+#                 "questionType": "填空题"
+#             }
+#         ],
+#         "chat": [
+#             {
+#                 "role": "system",
+#                 "content": "您好，我是您的随访助手，希望您最近身体状况良好。我将通过一系列问题来了解您的健康状况，这些问题将帮助我们更好地为您提供服务。首先，我想了解一下，最近您的身体有没有什么不舒服的地方？比如胸痛、胸闷、肌肉酸痛、心悸或者呼吸困难？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "没有。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "好的，那我们继续下一个问题。最近身体有没有出血的情况？比如皮肤、口腔粘膜出血，黑便或者血便，血尿，咳血？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "没有。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "好的，接下来我想了解一下您的体重情况。您最近有测量过体重吗？体重是多少？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "最近没称，大概70公斤。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "好的，了解了。接下来想了解一下您的运动情况，您最近的运动情况怎么样？是规律运动，还是不规律运动？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "偶尔运动一下。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "好的，了解了。那么，出院后的睡眠质量怎么样？是睡得挺香的，还是有时候会睡不着，或者容易醒，或者总是觉得困？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "基本跟之前一样，偶尔会睡不着。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "了解了，那您出院后的情绪状态怎么样？是心情愉快，还是有时候会感到焦虑、抑郁，或者容易暴躁？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "状态挺好。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "好的，了解了。接下来的问题是：自从得了这个病以来，目前的工作承受能力怎么样？是正常，还是轻度受限制，还是严重受限，甚至卧床为主？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "目前轻度受限吧，工作久了容易累。后面可能会好点。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "了解了，那您的饮食习惯怎么样？是清淡，还是偏咸，辛辣，肥腻，还是喜甜？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "一般清淡为主，或者偏甜。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "了解了，您目前的饮食习惯是清淡为主，偶尔偏甜。那么，您目前有吸烟的情况吗？是不吸烟，还是仍在吸烟，或者正在戒烟？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "现在不抽了。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "了解了，您是住院时开始戒烟的吗？还是戒烟不到半年，还是戒烟已超过半年？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "戒烟不到半年。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "了解了，您现在不饮酒吗？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "偶尔喝点啤酒、白酒。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "每天喝多少毫升呢？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "啤酒一瓶左右，白酒1两吧。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "了解了，您能坚持按照医嘱规律服用心脏相关药物吗？是能，还是不能？"
+#             },
+#             {
+#                 "role": "user",
+#                 "content": "坚持规律服药。"
+#             },
+#             {
+#                 "role": "system",
+#                 "content": "问卷已经完成。"
+#             }
+#         ],
+#         "questionsListTransformByLLM": "\n\n1. 最近身体有没有什么不舒服的地方？比如胸痛、胸闷、肌肉酸痛、心悸或者呼吸困难？\n2. 如果有这些症状，是在什么情况下出现的？是休息的时候也有，还是日常活动的时候感觉不明显，还是日常活动的时候感觉明显？\n3. 最近身体有没有出血的情况？比如皮肤、口腔粘膜出血，黑便或者血便，血尿，咳血？\n4. 最近有测量过体重吗？体重是多少？\n5. 最近的运动情况怎么样？是规律运动，还是不规律运动？\n6. 出院后的睡眠质量怎么样？是睡得挺香的，还是有时候会睡不着，或者容易醒，或者总是觉得困？\n7. 出院后的情绪状态怎么样？是心情愉快，还是有时候会感到焦虑、抑郁，或者容易暴躁？\n8. 自从得了这个病以来，目前的工作承受能力怎么样？是正常，还是轻度受限制，还是严重受限，甚至卧床为主？\n9. 现在的饮食习惯怎么样？是清淡，还是偏咸，辛辣，肥腻，还是喜甜？\n10. 目前有吸烟的情况吗？是不吸烟，还是仍在吸烟，或者正在戒烟？\n11. 如果有吸烟，每天吸烟的数量是多少支？\n12. 如果已经戒烟，已经戒烟了多长时间？是住院时开始戒烟，还是戒烟不到半年，还是戒烟已超过半年？\n13. 目前的饮酒情况怎么样？是从不饮酒，还是有饮酒？\n14. 如果有饮酒，常喝的是哪种酒？是白酒，红酒，还是啤酒？\n15. 每天饮酒的量是多少ml？\n16. 能坚持按照医嘱规律服用心脏相关药物吗？是能，还是不能？\n17. 如果不能，能告诉我原因吗？",
+#         "questionName": "胸痛患者AI智能随访问卷",
+#         "qId": "Q001"
+#     }
+# }

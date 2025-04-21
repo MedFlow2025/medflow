@@ -1,4 +1,3 @@
 [
     {"input": {"basic_medical_record": {"chief_complaint": "腹痛、腹泻 1 天", "history_of_present_illness": "1 天前进食后腹痛，腹泻后腹痛加剧，之前腹泻腹痛会缓解", "past_medical_history": "曾患肠胃炎，可这次感觉不同", "personal_history": "","allergy_history":" 否认过敏，但吃的都是常吃的食物 ","physical_examination": {"temperature":"39℃","pulse":"110","blood_pressure":"70/50","respiration":"28 次 "},"auxiliary_examination":" 大便常规有异常 "}} }
-
 ]
