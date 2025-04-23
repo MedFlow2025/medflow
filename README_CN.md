@@ -270,7 +270,7 @@ http://<webui ip>:<webui port>
 + 如果您想做医疗或其他领域的数据处理、日常训练、增强训练等，建议使用EPAI平台！
 + 如有在医院私有化部署的需求，HIS相关的定制需求，推荐经验丰富的医疗合作伙伴**HIS厂商**：**[广州天锐医健信息科技有限公司](https://www.skytek.com.cn/)**，欢迎联系！
 <div align="center">
-  <img src="./assets/lxfs.jpg" style="width:60px; height:60px">
+  <img src="./assets/lxfs.jpg" style="width:200px; height:200px">
 </div>
 
 + 我们期待通过医疗大模型推理部署服务为医疗行业带来新变革，为患者和医护人员提供更优质的服务。诚邀您的参与和支持！
