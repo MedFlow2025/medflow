@@ -209,6 +209,9 @@ bash test-doctormedicalrecord.sh
 ```bash
 http://<webui ip>:<webui port>
 ```
+<div align="center">
+  <img src="./assets/webui.png">
+</div>
 
 ##  5. Statement of Agreement
 
