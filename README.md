@@ -206,6 +206,9 @@ You can open the URL prompted after starting the WebUI interface to experience t
 ```bash
 http://<webui ip>:<webui port>
 ```
+<div align="center">
+  <img src="./assets/webui.png">
+</div>
 
 ##  5. Statement of Agreement
 
