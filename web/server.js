@@ -1,3 +1,4 @@
+import os from "os";
 import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import https from 'https';
@@ -8,9 +9,21 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function getLocalIP() {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === "IPv4" && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return "127.0.0.1";
+}
+
 const app = express();
-const host = '127.0.0.1';
-const port = 5173;
+const host = getLocalIP();
+const port = 7860;
 const inferport = 8013;
 const voiceport = 9007;
 

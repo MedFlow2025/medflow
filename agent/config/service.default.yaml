@@ -1,0 +1,20 @@
+PORTS:
+  VLLM_OPENAI_PORT: 8000
+  INFERENCE_PORT: 8013
+  UI_PORT: 7860
+  DATA_ANNOTATION_PORT: 8016
+  #VOICE_PORT: 9007
+
+ENV:
+  HOST_IP: 10.130.35.2
+  CUDA_VISIBLE_DEVICES: 0,1,2,3
+  MODEL_NAME: model_medical_20250630
+  MODEL_PATH: /home/workspace/medical_models/
+  START_SCRIPT: ../scripts/start-service.sh
+  LOG_DIR: ../agent/scripts/logs/
+  TEST_DIR: ../test/
+
+RUNTIME:
+  TENSOR_PARALLEL_SIZE: 4
+  GPU_MEMORY_UTILIZATION: 0.9
+  MAX_TOKENS: 4096

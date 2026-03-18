@@ -1,0 +1,15 @@
+{
+    "basic_medical_record": {
+        "chief_complaint": "神志模糊、呕吐1小时",
+        "history_of_present_illness": "1小时前饮酒后出现神志模糊，伴呕吐非咖啡色胃内容数次，无肢体抽搐，无呼吸困难，无胸闷、胸痛",
+        "past_medical_history": "既往高血压病史1个月，规律服药治疗",
+        "personal_history": "否认吸烟、有饮酒史",
+        "allergy_history": "否认药物和食物过敏史",
+        "physical_examination": "体温： 36.6℃ ， 脉搏： 84次/分， 血压： 197/73,呼吸:20次",
+        "auxiliary_examination": "",
+        "check_invalid": "既往史与血压值矛盾，血压值偏高且未给出单位，症状描述不够专业"
+    },
+    "historical_conversations": [
+    ],
+    "remark":""
+}

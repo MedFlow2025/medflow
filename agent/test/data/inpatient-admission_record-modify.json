@@ -1,0 +1,42 @@
+{
+    "input": {
+        "doctor_supplement": "姓名改成王五，辅助检查在中医院检过胃镜当时没问题",
+        "inpatient": {
+            "patient_name": "张三",
+            "patient_gender": "男",
+            "patient_age": "49",
+            "ethnicity": "",
+            "occupation": "",
+            "marital_status": "",
+            "birthplace": "广东省广州市天河区珠江新城12号院",
+            "admission_time": "2025年6月3号",
+            "recording_time": "",
+            "history_reporter": "",
+            "chief_complaint": "解黑便11小时",
+            "history_of_present_illness": "昨晚20时开始无明显诱因出现解黑便2次，呈黑色成形大便，每次量约100g，伴阵发性腹部隐痛，偶有头晕、出冷汗，有气促，无晕厥，无胸痛、胸闷，无呕吐，无发热。",
+            "past_medical_history": "胃窦部溃疡伴出血、肺部感染、糜烂性胃炎、十二指肠炎、贫血、高血压病和腰椎退行性病变，骨质疏松，电解质紊乱，老年性心脏瓣膜病，高血压病史多年，长期服药治疗，否认糖尿病。",
+            "physical_examination": {
+                "temperature": "36.5℃",
+                "pulse": "86次/分",
+                "blood_pressure": "150/61mmHg",
+                "respiration": "18次/分"
+            },
+            "auxiliary_examination": "",
+            "signature_of_physician": "",
+            "initial_diagnosis": [
+                {
+                    "diagnosis_name": "上消化道出血",
+                    "diagnosis_name_retrieve": "上消化道出血",
+                    "diagnosis_code": "K92.208",
+                    "diagnosis_identifier": ""
+                },
+                {
+                    "diagnosis_name": "贫血",
+                    "diagnosis_name_retrieve": "贫血",
+                    "diagnosis_code": "D64.900",
+                    "diagnosis_identifier": ""
+                }
+            ]
+        }
+    }
+}

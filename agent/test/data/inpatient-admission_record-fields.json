@@ -1,0 +1,13 @@
+{
+    "input": {
+        "included_fields": [
+            "patient_name",
+            "patient_gender",
+            "ethnicity"
+        ],
+        "inpatient": {
+            "patient_age": ""
+        },
+        "doctor_supplement": "姓名张三，性别男，49岁，汉族"
+    }
+}
