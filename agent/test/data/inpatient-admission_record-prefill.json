@@ -1,0 +1,11 @@
+{
+    "input": {
+        "inpatient": {
+            "physical_examination": {
+                "temperature": "39.8℃",
+                "pulse": "86次/分"
+            }
+        },
+        "doctor_supplement": "姓名张三，性别男，49岁，汉族，已婚，广东省广州市天河区珠江新城12号院，2025年6月3号入院的，主要症状拉肚子，初步诊断为肠胃型感冒，腹泻"
+    }
+}

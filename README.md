@@ -42,6 +42,10 @@ With a focus on ease of use and adaptability, this framework supports seamless i
 + Ready-to-Use: Comes pre-equipped with fine-tuned and enhanced training for medical domain-specific models.
 + Demo Interface: Visual business trial interface (user-friendly for non-technical personnel).
 
+**Process Architecture**
+
+<img src="assets/process-architecture-en.png" alt="process-architecture-en.png" style="zoom: 80%;" />
+
 
 ##  2. Model Downloads
 

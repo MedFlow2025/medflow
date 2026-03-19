@@ -1,0 +1,249 @@
+{
+    "input": {
+        "client_info": [
+            {
+                "patient": {
+                    "patient_name": "张三",
+                    "patient_gender": "男",
+                    "patient_age": "44",
+                    "if_child": "",
+                    "certificate_type": "",
+                    "certificate_number": "",
+                    "mobile_number": "",
+                    "current_address": {
+                        "province": "",
+                        "city": "",
+                        "district": "",
+                        "street": ""
+                    },
+                    "detailed_address": ""
+                },
+                "guardian": {
+                    "guardian_name": "",
+                    "certificate_type": "",
+                    "certificate_number": ""
+                }
+            }
+        ],
+        "basic_medical_record": {
+            "chief_complaint": "咳嗽伴白色痰，高烧40度，胸闷",
+            "history_of_present_illness": "患者自述有咳嗽，伴有白色痰，高烧40度，胸闷，呼吸困难，胸痛为钝痛，无放射，否认近期接触感冒或肺炎患者",
+            "past_medical_history": "高血压,否认糖尿病,否认心脏病,否认慢性支气管炎",
+            "personal_history": "否认吸烟;一个月饮酒几次",
+            "allergy_history": "否认药物过敏;否认食物过敏;否认其他物质过敏",
+            "physical_examination": {
+                "temperature": "",
+                "pulse": "",
+                "blood_pressure": "",
+                "respiration": ""
+            },
+            "auxiliary_examination": ""
+        },
+        "diagnosis": [
+            {
+                "diagnosis_name": "急性支气管炎",
+                "diagnosis_name_retrieve": "",
+                "diagnosis_code": "J20.901",
+                "diagnosis_identifier": "疑似"
+            },
+            {
+                "diagnosis_name": "肺炎",
+                "diagnosis_name_retrieve": "",
+                "diagnosis_code": "J18.901",
+                "diagnosis_identifier": "疑似"
+            }
+        ],
+        "therapy_fields": [
+            {
+                "field_id": "prescription",
+                "field_name": "药物治疗"
+            },
+            {
+                "field_id": "transfusion",
+                "field_name": "输液"
+            },
+            {
+                "field_id": "disposition",
+                "field_name": "处置"
+            },
+            {
+                "field_id": "examine",
+                "field_name": "检查"
+            },
+            {
+                "field_id": "assay",
+                "field_name": "化验"
+            },
+            {
+                "field_id": "surgical",
+                "field_name": "手术治疗"
+            },
+            {
+                "field_id": "chemo",
+                "field_name": "化学治疗"
+            },
+            {
+                "field_id": "radiation",
+                "field_name": "放射治疗"
+            },
+            {
+                "field_id": "psycho",
+                "field_name": "心理治疗"
+            },
+            {
+                "field_id": "rehabilitation",
+                "field_name": "康复治疗"
+            },
+            {
+                "field_id": "physical",
+                "field_name": "物理治疗"
+            },
+            {
+                "field_id": "alternative",
+                "field_name": "替代疗法"
+            },
+            {
+                "field_id": "observation",
+                "field_name": "观察治疗"
+            }
+        ]
+    },
+    "output": {
+        "pick_therapy": [
+            {
+                "therapy_name": "方案一",
+                "therapy_summary": "本方案以抗生素治疗为主，结合退热、化痰药物，辅以静脉补液和必要的影像学与实验室检查，旨在快速控制感染、缓解症状并评估病情严重程度。适用于病情较重但尚未出现严重并发症的患者。",
+                "therapy_interpret": [
+                    {
+                        "therapy_name": "药物治疗",
+                        "therapy_content": "给予广谱抗生素如头孢克肟（Cefixime）或阿莫西林-克拉维酸（Amoxicillin-Clavulanate），用于控制细菌感染。同时使用退烧药如对乙酰氨基酚（Paracetamol）控制高热。止咳化痰药物如氨溴索（Ambroxol）可缓解咳嗽和排痰。"
+                    },
+                    {
+                        "therapy_name": "输液",
+                        "therapy_content": "静脉输注生理盐水或葡萄糖盐水，以补充体液、维持电解质平衡，并可配合抗生素静脉给药。"
+                    },
+                    {
+                        "therapy_name": "检查",
+                        "therapy_content": "进行胸部X光或CT检查以评估肺部感染程度，同时进行血常规、C反应蛋白（CRP）和降钙素原（PCT）检测以评估炎症程度和感染类型。"
+                    },
+                    {
+                        "therapy_name": "处置",
+                        "therapy_content": "保持病房空气流通，鼓励患者多饮水，保持卧床休息，避免劳累。"
+                    }
+                ]
+            },
+            {
+                "therapy_name": "方案二",
+                "therapy_summary": "本方案侧重于非典型病原体感染的可能，采用大环内酯类抗生素，并结合物理治疗促进排痰。适用于怀疑非典型病原体感染或对常规抗生素反应不佳的患者。",
+                "therapy_interpret": [
+                    {
+                        "therapy_name": "药物治疗",
+                        "therapy_content": "使用大环内酯类抗生素如阿奇霉素（Azithromycin）或克拉霉素（Clarithromycin），适用于对β-内酰胺类抗生素过敏或怀疑为非典型病原体感染的患者。同时使用退烧药和止咳化痰药物。"
+                    },
+                    {
+                        "therapy_name": "物理治疗",
+                        "therapy_content": "进行胸部物理治疗，如拍背排痰、体位引流，以促进痰液排出，改善通气。"
+                    },
+                    {
+                        "therapy_name": "检查",
+                        "therapy_content": "进行痰培养和药敏试验，以明确病原体类型和指导抗生素选择。"
+                    },
+                    {
+                        "therapy_name": "处置",
+                        "therapy_content": "建议患者卧床休息，保持室内湿度适宜，避免刺激性气体和粉尘。"
+                    }
+                ]
+            },
+            {
+                "therapy_name": "方案三",
+                "therapy_summary": "本方案适用于病情较重或进展较快的肺炎患者，采用强效抗生素静脉给药，并结合影像学和血气分析评估病情，以防止病情恶化。",
+                "therapy_interpret": [
+                    {
+                        "therapy_name": "药物治疗",
+                        "therapy_content": "使用氟喹诺酮类抗生素如左氧氟沙星（Levofloxacin）或莫西沙星（Moxifloxacin），适用于成人患者，尤其是社区获得性肺炎的治疗。同时使用退烧药和止咳化痰药物。"
+                    },
+                    {
+                        "therapy_name": "输液",
+                        "therapy_content": "静脉输注抗生素和补液，以快速控制感染并维持水电解质平衡。"
+                    },
+                    {
+                        "therapy_name": "检查",
+                        "therapy_content": "进行胸部CT、血气分析和痰培养，以评估肺部病变程度和是否存在低氧血症。"
+                    },
+                    {
+                        "therapy_name": "处置",
+                        "therapy_content": "密切监测生命体征，必要时吸氧治疗，保持患者安静休息。"
+                    }
+                ]
+            },
+            {
+                "therapy_name": "方案四",
+                "therapy_summary": "本方案适用于症状较轻、无严重并发症的患者，以口服药物为主，结合门诊观察和基础检查，避免住院治疗，减少医疗资源占用。",
+                "therapy_interpret": [
+                    {
+                        "therapy_name": "观察治疗",
+                        "therapy_content": "对于症状较轻、无明显呼吸困难或低氧血症的患者，可采取门诊观察治疗，每日监测体温、呼吸频率和血氧饱和度。"
+                    },
+                    {
+                        "therapy_name": "药物治疗",
+                        "therapy_content": "口服抗生素如阿莫西林-克拉维酸或头孢丙烯（Cefprozil），配合退烧药和止咳化痰药物。"
+                    },
+                    {
+                        "therapy_name": "检查",
+                        "therapy_content": "进行血常规和胸部X光检查，以评估感染程度和肺部情况。"
+                    },
+                    {
+                        "therapy_name": "处置",
+                        "therapy_content": "建议患者居家休息，避免外出，保持良好营养和水分摄入。"
+                    }
+                ]
+            },
+            {
+                "therapy_name": "方案五",
+                "therapy_summary": "本方案适用于病情复杂、疑似混合感染或治疗反应不佳的患者，采用联合抗生素治疗，并结合全面的检查和处置措施，以提高治疗成功率。",
+                "therapy_interpret": [
+                    {
+                        "therapy_name": "药物治疗",
+                        "therapy_content": "联合使用两种抗生素（如阿莫西林-克拉维酸+阿奇霉素），以覆盖可能的混合感染。同时使用退烧药和止咳化痰药物。"
+                    },
+                    {
+                        "therapy_name": "输液",
+                        "therapy_content": "静脉输注抗生素和补液，以快速控制感染并维持水电解质平衡。"
+                    },
+                    {
+                        "therapy_name": "检查",
+                        "therapy_content": "进行胸部CT、血气分析、痰培养和药敏试验，以全面评估病情和指导治疗。"
+                    },
+                    {
+                        "therapy_name": "处置",
+                        "therapy_content": "密切监测生命体征，必要时吸氧治疗，保持患者安静休息。"
+                    }
+                ]
+            }
+        ],
+        "generate_therapy": [
+            {
+                "therapy_name": "",
+                "therapy_content": {
+                    "prescription": [],
+                    "transfusion": [],
+                    "disposition": [],
+                    "examine": [],
+                    "assay": [],
+                    "surgical": [],
+                    "chemo": [],
+                    "radiation": [],
+                    "psycho": [],
+                    "rehabilitation": [],
+                    "physical": [],
+                    "alternative": [],
+                    "observation": []
+                }
+            }
+        ]
+    },
+    "chat": {
+        "historical_conversations_bak": [],
+        "historical_conversations": []
+    }
+}

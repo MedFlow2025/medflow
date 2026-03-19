@@ -8,10 +8,10 @@ inference_server_port=8013
 web_server_port=7860
 case2chat_port=8016
 max_round=50
-gpu_memory_utilization=0.9
+gpu_memory_utilization=0.8
 tensor_parallel_size=4
 max_tokens=4096
-voice_server_port=9997
+voice_server_port=9007
 
 export CUDA_VISIBLE_DEVICES=${IEI_VISIBLE_DEVICES}
 MODEL_NAME=${IEI_VISIBLE_MODELS_NAME}

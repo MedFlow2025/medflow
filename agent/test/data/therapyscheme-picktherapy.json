@@ -1,0 +1,111 @@
+{
+    "input": {
+        "client_info": [
+            {
+                "patient": {
+                    "patient_name": "张三",
+                    "patient_gender": "男",
+                    "patient_age": "44",
+                    "if_child": "",
+                    "certificate_type": "",
+                    "certificate_number": "",
+                    "mobile_number": "",
+                    "current_address": {
+                        "province": "",
+                        "city": "",
+                        "district": "",
+                        "street": ""
+                    },
+                    "detailed_address": ""
+                },
+                "guardian": {
+                    "guardian_name": "",
+                    "certificate_type": "",
+                    "certificate_number": ""
+                }
+            }
+        ],
+        "basic_medical_record": {
+            "chief_complaint": "咳嗽伴白色痰，高烧40度，胸闷",
+            "history_of_present_illness": "患者自述有咳嗽，伴有白色痰，高烧40度，胸闷，呼吸困难，胸痛为钝痛，无放射，否认近期接触感冒或肺炎患者",
+            "past_medical_history": "高血压,否认糖尿病,否认心脏病,否认慢性支气管炎",
+            "personal_history": "否认吸烟;一个月饮酒几次",
+            "allergy_history": "否认药物过敏;否认食物过敏;否认其他物质过敏",
+            "physical_examination": {
+                "temperature": "",
+                "pulse": "",
+                "blood_pressure": "",
+                "respiration": ""
+            },
+            "auxiliary_examination": ""
+        },
+        "diagnosis": [
+            {
+                "diagnosis_name": "急性支气管炎",
+                "diagnosis_name_retrieve": "",
+                "diagnosis_code": "J20.901",
+                "diagnosis_identifier": "疑似"
+            },
+            {
+                "diagnosis_name": "肺炎",
+                "diagnosis_name_retrieve": "",
+                "diagnosis_code": "J18.901",
+                "diagnosis_identifier": "疑似"
+            }
+        ],
+        "therapy_fields": [
+            {
+                "field_id": "prescription",
+                "field_name": "药物治疗"
+            },
+            {
+                "field_id": "transfusion",
+                "field_name": "输液"
+            },
+            {
+                "field_id": "disposition",
+                "field_name": "处置"
+            },
+            {
+                "field_id": "examine",
+                "field_name": "检查"
+            },
+            {
+                "field_id": "assay",
+                "field_name": "化验"
+            },
+            {
+                "field_id": "surgical",
+                "field_name": "手术治疗"
+            },
+            {
+                "field_id": "chemo",
+                "field_name": "化学治疗"
+            },
+            {
+                "field_id": "radiation",
+                "field_name": "放射治疗"
+            },
+            {
+                "field_id": "psycho",
+                "field_name": "心理治疗"
+            },
+            {
+                "field_id": "rehabilitation",
+                "field_name": "康复治疗"
+            },
+            {
+                "field_id": "physical",
+                "field_name": "物理治疗"
+            },
+            {
+                "field_id": "alternative",
+                "field_name": "替代疗法"
+            },
+            {
+                "field_id": "observation",
+                "field_name": "观察治疗"
+            }
+        ]
+    }
+}

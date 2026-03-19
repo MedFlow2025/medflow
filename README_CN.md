@@ -47,6 +47,10 @@
 + 自带经过微调、增强训练后的医疗领域专用模型
 + 可视化业务试用界面（非技术人员友好）
 
+**流程架构**
+
+<img src="assets/process-architecture-zh.png" alt="process-architecture-zh.png" style="zoom: 80%;" />
+
 
 ##  2. Model Details
 
