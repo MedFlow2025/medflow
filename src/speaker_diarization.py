@@ -24,12 +24,12 @@ def args_parser():
     parser.add_argument(
         "--model-path",
         type=str,
-        default="/home/workspace/models/SenseVoiceSmall",
+        default="/home/workspace/models/modelscope/hub/iic/SenseVoiceSmall/",
     )
     parser.add_argument(
         "--sd-model-path",
         type=str,
-        default="/home/workspace/models/diar_streaming_sortformer_4spk-v2/diar_streaming_sortformer_4spk-v2.nemo",
+        default="/root/.cache/modelscope/hub/models/diar_streaming_sortformer_4spk-v2/diar_streaming_sortformer_4spk-v2.nemo",
     )
     parser.add_argument("--ssl-cert", type=str, default="../web/cert.pem")
     parser.add_argument("--ssl-key", type=str, default="../web/key.pem")

@@ -17,27 +17,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 from pydantic import BaseModel
-from tools import (
-    available_tests,
-    check_config,
-    config_keys,
-    config_restore,
-    config_show,
-    config_update,
-    gpu_status,
-    list_model,
-    log_context,
-    port_status,
-    recommend_gpu_allocation,
-    search_logs,
-    service_logs,
-    service_restart,
-    service_start,
-    service_status,
-    service_stop,
-    service_test,
-    service_test_all,
-)
+from tools import *
 from typing_extensions import Annotated, TypedDict
 
 app = FastAPI()
@@ -80,7 +60,16 @@ tools = [
     log_context,
     available_tests,
     service_test,
-    service_test_all,
+    # service_test_all,
+    list_benchmark,
+    run_benchmark,
+    get_benchmark_result,
+    check_benchmark,
+    list_benchmark_jobs,
+    stop_benchmark,
+    list_medbench,
+    run_medbench,
+    get_medbench_progress,
 ]
 tools_by_name = {tool.name: tool for tool in tools}
 model_with_tools = llm.bind_tools(tools)
@@ -293,12 +282,14 @@ def main():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', type=str, choices=['cli', 'api'], default='api')
+    parser.add_argument("--mode", type=str, choices=["cli", "api"], default="api")
     args = parser.parse_args()
 
     if args.mode == "cli":
         main()
     else:
         uvicorn.run(
-            app="inference_agent:app", host=INFERENCE_AGENT_HOST, port=INFERENCE_AGENT_PORT
+            app="inference_agent:app",
+            host=INFERENCE_AGENT_HOST,
+            port=INFERENCE_AGENT_PORT,
         )

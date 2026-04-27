@@ -1,10 +1,15 @@
 import ast
+import json
 import os
+import signal
 import socket
 import subprocess
+import threading
 import time
+import uuid
 from typing import Dict
 
+import psutil
 import yaml
 from langchain.tools import tool
 
@@ -30,6 +35,7 @@ LOG_FILES = {
     "case2chat": "case2chat.log",
 }
 MAX_OUTPUT_CHARS = 6000
+PROGRESS_UPDATE_INTERVAL = 5
 
 
 def safe_output(text):
@@ -623,6 +629,559 @@ def model_list() -> str:
     return run_command(f"ls {CONFIG['ENV']['MODEL_PATH']}")
 
 
+def benchmark_list() -> str:
+    """List all available benchmark datasets."""
+    CONFIG = show_config()
+    return run_command(f"ls {CONFIG['ENV']['BENCHMARK_DIR']}/dataset")
+
+
+def is_process_running(pid: int) -> bool:
+    """Check if the process is running and not a zombie."""
+    try:
+        p = psutil.Process(pid)
+        return p.is_running() and p.status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
+
+
+def monitor_job(job_id: str, pid: int, meta_path: str):
+    """Background thread checks if the job is finished."""
+    while True:
+        if not is_process_running(pid):
+            meta = json.load(open(meta_path))
+            if meta["status"] == "running":
+                meta["status"] = "finished"
+                meta["end_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                with open(meta_path, "w") as f:
+                    json.dump(meta, f, indent=2)
+                break
+        time.sleep(10)
+
+
+def benchmark_test(dataset: str, max_workers: int = 5, save_every: int = 2) -> str:
+    """Start a benchmark evaluation job (runs asynchronously in the background)."""
+
+    start_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    job_id = f"{int(time.time())}_{str(uuid.uuid4())[:6]}"
+
+    cfg = show_config()
+    model = cfg["ENV"]["MODEL_NAME"]
+    benchmark_dir = cfg["ENV"]["BENCHMARK_DIR"]
+    base_url = f"http://{cfg['ENV']['HOST_IP']}:{cfg['PORTS']['VLLM_OPENAI_PORT']}/v1"
+
+    job_dir = f"{benchmark_dir}/logs/{job_id}"
+    os.makedirs(job_dir, exist_ok=True)
+
+    meta_file = os.path.join(job_dir, "meta.json")
+    log_file = os.path.join(job_dir, "run.log")
+    output_file = os.path.join(job_dir, "result.json")
+
+    cmd = [
+        "python",
+        f"{benchmark_dir}/eval_runner.py",
+        "--mode",
+        "eval",
+        "--base-url",
+        base_url,
+        "--model",
+        model,
+        "--dataset",
+        f"{benchmark_dir}/dataset/{dataset}",
+        "--output",
+        output_file,
+        "--max-workers",
+        str(max_workers),
+        "--save-every",
+        str(save_every),
+    ]
+    log_f = open(log_file, "w")
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=log_f,
+        stderr=subprocess.STDOUT,
+        preexec_fn=os.setsid,
+    )
+
+    pid = proc.pid
+
+    threading.Thread(
+        target=monitor_job, args=(job_id, int(pid), meta_file), daemon=True
+    ).start()
+
+    with open(meta_file, "w") as f:
+        json.dump(
+            {
+                "job_id": job_id,
+                "pid": pid,
+                "model": model,
+                "dataset": dataset,
+                "mode": "eval",
+                "log": log_file,
+                "output": output_file,
+                "start_time": start_time,
+                "status": "running",
+                "end_time": "",
+            },
+            f,
+            indent=2,
+        )
+
+    return f"任务已启动: \njob_id={job_id}\npid={pid}\nmodel={model}\ndataset={dataset}"
+
+
+def benchmark_check(job_id: str) -> str:
+    """Check the current status of a benchmark job."""
+
+    cfg = show_config()
+    benchmark_dir = cfg["ENV"]["BENCHMARK_DIR"]
+    meta_path = f"{benchmark_dir}/logs/{job_id}/meta.json"
+
+    if not os.path.exists(meta_path):
+        return "job_id 不存在: status=not found"
+
+    meta = json.load(open(meta_path))
+    pid = meta["pid"]
+
+    if meta["status"] == "running":
+        return f"任务运行中: status={meta['status']}, job_id={job_id}, pid={pid}, 可查看中间结果: {meta['output']}"
+
+    elif meta["status"] == "finished":
+        return f"任务已结束: status={meta['status']}, job_id={job_id}, 可查看完整结果: {meta['output']}"
+
+    elif meta["status"] == "stopped":
+        return f"任务意外终止: status={meta['status']}, job_id={job_id}, 可查看部分结果: {meta['output']}, 结果可能不完整。"
+
+    else:  # failed
+        return "任务状态查询失败: status=failed"
+
+
+def benchmark_result(job_id: str) -> str:
+    """Retrieve the evaluation result of a benchmark job."""
+
+    cfg = show_config()
+    benchmark_dir = cfg["ENV"]["BENCHMARK_DIR"]
+    meta_path = f"{benchmark_dir}/logs/{job_id}/meta.json"
+
+    if not os.path.exists(meta_path):
+        return "job_id 不存在"
+
+    meta = json.load(open(meta_path))
+    output_file = meta["output"]
+    mode = meta["mode"]
+
+    if mode == "medbench":
+        return "ERROR: Accuracy cannot be calculated (no ground truth labels). \
+The MedBench inference job only generates answers without evaluation."
+
+    if not os.path.exists(output_file):
+        return "结果尚未生成"
+    elif os.path.isdir(output_file):
+        return f"ERROR: {output_file} is a directory."
+
+    data = json.load(open(output_file))
+    summary = data["summary"]
+
+    return (
+        f"评测结果:\n"
+        f"total={summary['total']}\n"
+        f"processed={summary['processed']}\n"
+        f"progress={summary['progress']}\n"
+        f"correct={summary['correct']}\n"
+        f"accuracy={summary['accuracy']:.4f}\n"
+        f"avg_f1={summary['avg_f1']:.4f}\n"
+        f"invalid={summary['invalid']}\n"
+        f"invalid_rate={summary['invalid_rate']:.4f}"
+    )
+
+
+def benchmark_job_list() -> str:
+    """List all benchmark jobs with their current status."""
+
+    cfg = show_config()
+    benchmark_dir = cfg["ENV"]["BENCHMARK_DIR"]
+
+    base = f"{benchmark_dir}/logs/"
+
+    if not os.path.exists(base):
+        return "暂无任务"
+
+    jobs = []
+
+    for job_id in os.listdir(base):
+        meta_path = os.path.join(base, job_id, "meta.json")
+        if not os.path.exists(meta_path):
+            continue
+
+        meta = json.load(open(meta_path))
+
+        jobs.append(
+            f"{meta['job_id']} | {meta['model']} | {meta['dataset']} | {meta['status']}"
+        )
+
+    return "\n".join(jobs) if jobs else "暂无任务"
+
+
+def benchmark_stop(job_id: str) -> str:
+    """Stop a running benchmark job."""
+
+    cfg = show_config()
+    benchmark_dir = cfg["ENV"]["BENCHMARK_DIR"]
+    job_dir = f"{benchmark_dir}/logs/{job_id}"
+    meta_file = os.path.join(job_dir, "meta.json")
+
+    if not os.path.exists(meta_file):
+        return f"not found: {meta_file}"
+
+    meta = json.load(open(meta_file))
+    pid = int(meta["pid"])
+
+    if meta["status"] == "running":
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+
+            meta["status"] = "stopped"
+            meta["end_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+            # add, for medbench stop
+            if "progress" in meta and "files" in meta["progress"]:
+                for file_stat in meta["progress"]["files"].values():
+                    if file_stat.get("status") == "running":
+                        file_stat["status"] = "stopped"
+
+            with open(meta_file, "w") as f:
+                json.dump(meta, f, indent=2)
+
+            return f"stopped successfully: job_id={job_id} pid={pid}"
+
+        except Exception as e:
+            return f"error: {str(e)}"
+
+    elif meta["status"] == "finished":
+        return "already finished: no action taken"
+
+    elif meta["status"] == "stopped":
+        return "already stopped: no action taken"
+
+    else:
+        return f"unvalid status: {meta['status']}"
+
+
+def medbench_list():
+    """List available MedBench datasets and jsonl files."""
+
+    CONFIG = show_config()
+    base_dir = CONFIG["ENV"]["BENCHMARK_DIR"]
+    dataset_dir = os.path.join(base_dir, "MedBench_LLM")
+
+    if not os.path.exists(dataset_dir):
+        return f"[ERROR]: Dataset directory not found: {dataset_dir}."
+
+    try:
+        files = [f for f in os.listdir(dataset_dir) if f.endswith(".jsonl")]
+    except Exception as e:
+        return f"[ERROR]: Failed to list dataset: {str(e)}."
+
+    files.sort()
+
+    if not files:
+        return "MedBench_LLM/ (empty)"
+
+    lines = []
+    lines.append(f"MedBench_LLM/ (共 {len(files)} 个文件):")
+
+    for f in files:
+        lines.append(f"  - {f}")
+
+    return "\n".join(lines)
+
+
+def medbench_run(dataset: str, max_workers: int = 5) -> str:
+    """Start a medbench evaluation job (runs asynchronously in the background)."""
+
+    start_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    job_id = f"{int(time.time())}_{str(uuid.uuid4())[:6]}"
+
+    cfg = show_config()
+    model = cfg["ENV"]["MODEL_NAME"]
+    benchmark_dir = cfg["ENV"]["BENCHMARK_DIR"]
+    base_url = f"http://{cfg['ENV']['HOST_IP']}:{cfg['PORTS']['VLLM_OPENAI_PORT']}/v1"
+
+    job_dir = f"{benchmark_dir}/logs/{job_id}"
+    os.makedirs(job_dir, exist_ok=True)
+
+    meta_file = os.path.join(job_dir, "meta.json")
+    log_file = os.path.join(job_dir, "run.log")
+    output_dir = os.path.join(job_dir, "results")
+    os.makedirs(output_dir, exist_ok=True)
+
+    dataset_path = f"{benchmark_dir}/{dataset}"
+    if not os.path.exists(dataset_path):
+        return (
+            f"Not Found: {dataset_path}. Please use `list_medbench` to check available MedBench jsonl files, \
+            or run the entire dataset: MedBench_LLM."
+        )
+    if dataset.endswith(".jsonl"):
+        # dataset_type = "file"
+        files = [os.path.basename(dataset_path)]
+    else:
+        # dataset_type = "folder"
+        files = [f for f in os.listdir(dataset_path) if f.endswith(".jsonl")]
+
+    cmd = [
+        "python",
+        f"{benchmark_dir}/eval_runner.py",
+        "--mode",
+        "medbench",
+        "--base-url",
+        base_url,
+        "--model",
+        model,
+        "--dataset",
+        dataset_path,
+        "--output",
+        output_dir,
+        "--max-workers",
+        str(max_workers),
+    ]
+    log_f = open(log_file, "w")
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=log_f,
+        stderr=subprocess.STDOUT,
+        preexec_fn=os.setsid,
+    )
+
+    pid = proc.pid
+
+    threading.Thread(
+        target=monitor_medbench_job, args=(job_id, int(pid), meta_file), daemon=True
+    ).start()
+
+    with open(meta_file, "w") as f:
+        json.dump(
+            {
+                "job_id": job_id,
+                "pid": pid,
+                "model": model,
+                "mode": "medbench",
+                "dataset": dataset,
+                # "dataset_type": dataset_type,
+                "files": files,
+                "log": log_file,
+                "output": output_dir,
+                "start_time": start_time,
+                "status": "running",
+                "end_time": "",
+            },
+            f,
+            indent=2,
+        )
+
+    return f"MedBench任务已启动: \njob_id={job_id}\npid={pid}\nmodel={model}\ndataset={dataset}"
+
+
+def monitor_medbench_job(job_id: str, pid: int, meta_path: str):
+    """Background thread: monitor job status + update progress."""
+
+    last_progress_update = 0
+
+    while True:
+        now = time.time()
+
+        try:
+            with open(meta_path, "r") as f:
+                meta = json.load(f)
+        except:
+            time.sleep(2)
+            continue
+
+        updated = False
+
+        if now - last_progress_update > 5:
+            if update_progress(meta):
+                updated = True
+            last_progress_update = now
+
+        if not is_process_running(pid):
+            if meta.get("status") == "running":
+                meta["status"] = "finished"
+                meta["end_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                updated = True
+
+            update_progress(meta)
+
+            if updated:
+                atomic_write_json(meta_path, meta)
+
+            break
+
+        if updated:
+            atomic_write_json(meta_path, meta)
+
+        time.sleep(5)
+
+
+def update_progress(meta: dict) -> bool:
+    """Update meta['progress'] and return whether progress was updated."""
+
+    dataset = meta.get("dataset").split("/")[0]
+    files = meta.get("files", [])
+    output_dir = meta.get("output")
+
+    if not dataset or not files or not output_dir:
+        return False
+
+    cfg = show_config()
+    benchmark_dir = cfg["ENV"]["BENCHMARK_DIR"]
+
+    progress = meta.setdefault("progress", {})
+    file_stats = progress.setdefault("files", {})
+
+    changed = False
+    completed_files = 0
+
+    for f in files:
+        input_path = os.path.join(benchmark_dir, dataset, f)
+        output_path = os.path.join(output_dir, f)
+
+        stat = file_stats.setdefault(f, {"total": None, "done": 0, "status": "pending"})
+
+        if stat["total"] is None:
+            try:
+                with open(input_path, "r", encoding="utf-8") as fin:
+                    stat["total"] = sum(1 for _ in fin)
+                changed = True
+            except:
+                stat["total"] = 0
+
+        try:
+            if os.path.exists(output_path):
+                with open(output_path, "r", encoding="utf-8") as fout:
+                    done = sum(1 for _ in fout)
+            else:
+                done = 0
+        except:
+            done = stat["done"]
+
+        if done != stat["done"]:
+            stat["done"] = done
+            changed = True
+
+        if stat["total"] > 0 and stat["done"] >= stat["total"]:
+            if stat["status"] == "running":
+                stat["status"] = "finished"
+                changed = True
+        else:
+            if stat["status"] == "pending":
+                stat["status"] = "running"
+                changed = True
+
+        if stat["status"] == "finished":
+            completed_files += 1
+
+    progress["total_files"] = len(files)
+    progress["completed_files"] = completed_files
+
+    return changed
+
+
+def atomic_write_json(path: str, data: dict):
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp_path, path)
+
+
+def medbench_progress(job_id: str) -> str:
+    """Get MedBench job progress summary."""
+
+    cfg = show_config()
+    benchmark_dir = cfg["ENV"]["BENCHMARK_DIR"]
+
+    meta_file = os.path.join(benchmark_dir, "logs", job_id, "meta.json")
+
+    if not os.path.exists(meta_file):
+        return f"未找到任务: {job_id}"
+
+    with open(meta_file, "r") as f:
+        meta = json.load(f)
+
+    status = meta.get("status", "unknown")
+    dataset = meta.get("dataset", "")
+    model = meta.get("model", "")
+    # dataset_type = meta.get("dataset_type", "")
+    start_time = meta.get("start_time", "")
+    end_time = meta.get("end_time", "")
+    progress = meta.get("progress", {})
+    files = progress.get("files", [])
+    output = meta.get("output", "")
+
+    if not files:
+        return f"""任务 {job_id}
+状态: {status}
+数据集: {dataset}
+（暂无进度信息）"""
+
+    total_files = progress.get("total_files", len(files))
+    completed_files = progress.get("completed_files", 0)
+
+    total_samples = 0
+    done_samples = 0
+
+    running_files = []
+    finished_files = []
+
+    for fname, stat in files.items():
+        total = stat.get("total", 0)
+        done = stat.get("done", 0)
+
+        total_samples += total
+        done_samples += done
+
+        if stat.get("status") == "running":
+            running_files.append((fname, done, total))
+
+        if stat.get("status") == "finished":
+            finished_files.append((fname, done, total))
+
+    percent = (done_samples / total_samples * 100) if total_samples > 0 else 0
+
+    lines = []
+    lines.append(f"任务: {job_id}")
+    lines.append(f"状态: {status}")
+    lines.append(f"模型: {model}")
+    lines.append(f"数据集: {dataset}")
+    lines.append(f"结果位置: {output}")
+    lines.append(f"详细信息: {meta_file}")
+    lines.append(f"文件进度: {completed_files}/{total_files}")
+    lines.append(f"样本进度: {done_samples}/{total_samples} ({percent:.1f}%)")
+    # lines.append(f"开始时间: {start_time}")
+
+    # if status == "finished":
+    #    lines.append(f"结束时间: {end_time}")
+
+    # if status == "stopped":
+    #    lines.append(f"终止时间: {end_time}")
+
+    if running_files:
+        lines.append("\n运行中文件:")
+
+        for fname, done, total in running_files[:]:
+            p = (done / total * 100) if total > 0 else 0
+            lines.append(f"- {fname}: {done}/{total} ({p:.1f}%)")
+
+    if finished_files:
+        lines.append("\n已完成文件:")
+
+        for fname, done, total in finished_files[:]:
+            p = (done / total * 100) if total > 0 else 0
+            lines.append(f"- {fname}: {done}/{total} ({p:.1f}%)")
+
+    return "\n".join(lines)
+
+
 @tool
 def get_ip() -> str:
     """Show current ip"""
@@ -825,3 +1384,221 @@ def config_restore() -> str:
 def list_model() -> str:
     """List all available models."""
     return model_list()
+
+
+@tool
+def list_benchmark() -> str:
+    """
+    List all available benchmark datasets.
+
+    Purpose:
+    - Help the agent or user discover which datasets can be used for evaluation.
+    - Typically used before calling `run_benchmark`.
+    """
+
+    return benchmark_list()
+
+
+@tool
+def run_benchmark(dataset: str, max_workers: int = 5, save_every: int = 2) -> str:
+    """
+    Start a benchmark evaluation job (runs asynchronously in the background).
+
+    Purpose:
+    - Evaluate model performance on a specified medical exam dataset.
+    - This is a long-running task (may take minutes to hours).
+
+    Args:
+    - dataset (str): Dataset filename (must be a JSON file). Supported values:
+        - 2021.json: China Medical Licensing Exam (中国职业医师考试)
+        - 2024.json: Clinical Medicine Graduate Exam (硕士西医临床考试)
+        - step1.json: USMLE Step 1 (美国执业医师考试)
+        - step2.json: USMLE Step 2 (美国执业医师考试)
+        - step3.json: USMLE Step 3 (美国执业医师考试)
+    - max_workers (int): Maximum number of concurrent workers.
+    - save_every (int): Save evaluation results after every N records.
+
+    Returns:
+    - A `job_id` string (unique identifier for the task)
+
+    Notes:
+    - This function does NOT return evaluation results.
+    - Use `check_benchmark` or `get_benchmark_result` to track progress or retrieve results.
+    """
+
+    return benchmark_test(dataset, max_workers, save_every)
+    # Before running, call `list_benchmark` to check which benchmark datasets are available.
+
+
+@tool
+def check_benchmark(job_id: str) -> str:
+    """
+    Check the current status of a benchmark job.
+
+    Purpose:
+    - Determine whether a job is still running or has completed.
+    - Retrieve basic runtime information.
+
+    Args:
+    - job_id (str): Unique identifier returned by `run_benchmark`.
+
+    Returns:
+    - Job status:
+        - "running": job is still executing
+        - "finished": job completed successfully
+        - "stopped": job has been stopped
+        - "failed": job terminated with error
+        - "not found": invalid job_id
+    """
+
+    return benchmark_check(job_id)
+
+
+@tool
+def get_benchmark_result(job_id: str) -> str:
+    """
+    Retrieve the evaluation result of a benchmark job.
+
+    Purpose:
+    - Obtain model performance metrics after job completion
+
+    Args:
+    - job_id (str): Unique identifier of the job
+
+    Returns:
+    - A summary string containing evaluation metrics, e.g.:
+       total, processed, progress, correct, accuracy, avg_f1, invalid, invalid_rate
+
+    Notes:
+    - This can be called whether the job is running or finished.
+    - For MedBench-related jobs, accuracy cannot be calculated (no ground truth labels).
+    """
+
+    return benchmark_result(job_id)
+
+
+@tool
+def list_benchmark_jobs() -> str:
+    """
+    List all benchmark jobs with their current status.
+
+    Purpose:
+    - Provide an overview of all submitted benchmark tasks.
+    - Help users identify job_id for further operations.
+
+    Returns:
+    - A formatted string where each line represents a job, including:
+       - job_id
+       - model name
+       - dataset name
+       - status (running / finished / stopped / failed / not found)
+    """
+
+    return benchmark_job_list()
+
+
+@tool
+def stop_benchmark(job_id: str) -> str:
+    """
+    Stop a running benchmark job by terminating its process.
+
+    Purpose:
+    - Terminate a long-running benchmark task manually
+    - Free system resources (CPU/GPU/memory)
+    - Handle incorrect or unnecessary job executions
+
+    Args:
+        job_id (str): Unique identifier of the benchmark job.
+
+    Returns:
+        str: Status message indicating result.
+
+    Notes:
+    - This operation is irreversible
+    - Partial results (if any) may be incomplete or discarded
+    - After stopping, `get_benchmark_result` may not return valid results
+    """
+
+    return benchmark_stop(job_id)
+
+
+@tool
+def list_medbench() -> str:
+    """
+    List available MedBench datasets and jsonl files.
+
+    Purpose:
+    - Discover available MedBench dataset folders and their jsonl files.
+    - Used before calling `run_medbench` to select valid inputs.
+
+    Returns:
+    - A human-readable list containing:
+        - Dataset folders (e.g. "MedBench_LLM")
+        - Corresponding jsonl files under each folder
+
+    Example output:
+    - MedBench_LLM/
+        - CMB-Clin-extended.jsonl
+        - MedMC.jsonl
+        - ...
+    """
+
+    return medbench_list()
+
+
+@tool
+def run_medbench(dataset: str = "MedBench_LLM", max_workers: int = 5) -> str:
+    """
+    Run MedBench inference job (no evaluation, only generate answers).
+
+    Purpose:
+    - Generate model outputs for MedBench-style datasets.
+    - Suitable for online submission (no accuracy calculation).
+
+    Args:
+    - dataset (str): Dataset folder or a specific jsonl file.
+        Examples:
+        - "MedBench_LLM" → run the entire dataset folder
+        - "MedBench_LLM/CMB-Clin-extended.jsonl" → run a single jsonl file
+    - max_workers (int): concurrency (default=5)
+
+    Returns:
+    - A `job_id` string (unique identifier for the task)
+
+    Notes:
+    - If `dataset` is a folder (e.g. "MedBench_LLM"), the system creates ONE job
+      and processes all jsonl files inside the folder.
+    - If `dataset` is a specific jsonl file, the system creates ONE job
+      for that file only.
+    - The system does NOT create one job per file when a folder is provided.
+    - When providing a file, use a relative path under the dataset directory
+      (e.g., "MedBench_LLM/your_file.jsonl").
+    - Use `list_medbench` to view all available medbench jsonl files.
+    """
+
+    return medbench_run(dataset, max_workers)
+
+
+@tool
+def get_medbench_progress(job_id: str) -> str:
+    """
+    Get MedBench job progress summary.
+
+    Args:
+    - job_id (str): Unique identifier for the task.
+
+    Returns:
+    - Human-readable progress report containing:
+        - Job ID
+        - Status (running/finished/stopped/failed)
+        - Model name
+        - Dataset name
+        - Result directory path
+        - Metadata file path
+        - File progress (completed_files/total_files)
+        - Sample progress (done_samples/total_samples with percentage)
+        - Running files list (filename, done/total samples, percentage)
+        - Finished files list (filename, done/total samples, percentage)
+    """
+
+    return medbench_progress(job_id)
