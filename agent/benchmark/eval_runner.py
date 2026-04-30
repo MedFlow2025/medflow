@@ -102,6 +102,36 @@ def extract_answer_fallback(text: str, valid_options: List[str]) -> Optional[str
 
     return None
 
+def get_question_score_2024(question_index: int) -> float:
+    """Score rule for 2024 dataset."""
+    q = question_index + 1
+
+    if 1 <= q <= 40: #A型题(第1部分)
+        return 1.5
+    elif 41 <= q <= 115: #A型题(第2部分)
+        return 2.0
+    elif 116 <= q <= 135: #B型题
+        return 1.5
+    elif 136 <= q <= 165: #X型题(多选题)
+        return 2.0
+    else: #未知题型
+        return 1.0
+
+
+def get_score(dataset_path: str, question_index: int, is_correct: bool) -> float:
+    """Generic scoring entry."""
+    if not is_correct:
+        return 0.0
+
+    name = os.path.basename(dataset_path)
+
+    if name == "2021.json":
+        return 1.0
+    elif name == "2024.json":
+        return get_question_score_2024(question_index)
+    else:
+        return 0.0
+
 
 def call_model(
     client: OpenAI,
@@ -153,7 +183,7 @@ def call_model(
     return f"ERROR: {last_error}"
 
 
-def process_one(client, model, idx, item):
+def process_one(client, model, idx, item, dataset):
     item = normalize_item(item)
     question = item["question"]
     ground_truth = item["answer"]
@@ -189,6 +219,8 @@ def process_one(client, model, idx, item):
     else:
         f1 = 0
 
+    score = get_score(dataset, idx - 1, is_correct)
+
     return {
         "index": idx,
         "question": question,
@@ -196,6 +228,7 @@ def process_one(client, model, idx, item):
         "predicted": predicted,
         "is_correct": is_correct,
         "f1": f1,
+        "score": score,
         "invalid": predicted is None,
         "response": response.model_dump()
         if isinstance(response, OutputFormat)
@@ -215,18 +248,20 @@ def run_eval(args):
     correct = 0
     invalid = 0
     f1_sum = 0
+    total_score = 0
 
     def update_metrics(res):
-        nonlocal correct, invalid, f1_sum
+        nonlocal correct, invalid, f1_sum, total_score
         if res["is_correct"]:
             correct += 1
         if res["invalid"]:
             invalid += 1
         f1_sum += res["f1"]
+        total_score += res.get("score", 0)
 
     with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
         futures = [
-            executor.submit(process_one, client, args.model, i + 1, item)
+            executor.submit(process_one, client, args.model, i + 1, item, args.dataset)
             for i, item in enumerate(data)
         ]
         total = len(data)
@@ -240,7 +275,7 @@ def run_eval(args):
 
                 if idx % args.save_every == 0:
                     save_partial(
-                        args.output, results, correct, invalid, f1_sum, total, idx
+                        args.output, results, correct, invalid, f1_sum, total_score, total, idx
                     )
 
             print(f"[{idx}/{total}] done")
@@ -248,11 +283,11 @@ def run_eval(args):
             if args.sleep:
                 time.sleep(args.sleep)
 
-    save_partial(args.output, results, correct, invalid, f1_sum, total, total)
+    save_partial(args.output, results, correct, invalid, f1_sum, total_score, total, total)
     print("DONE")
 
 
-def save_partial(path, results, correct, invalid, f1_sum, total, processed):
+def save_partial(path, results, correct, invalid, f1_sum, total_score, total, processed):
     if path is None:
         return
 
@@ -265,6 +300,7 @@ def save_partial(path, results, correct, invalid, f1_sum, total, processed):
         "invalid": invalid,
         "invalid_rate": round(invalid / processed, 4) if processed else 0,
         "avg_f1": round(f1_sum / processed, 4) if processed else 0,
+        "total_score": total_score,
     }
 
     with open(path, "w", encoding="utf-8") as f:

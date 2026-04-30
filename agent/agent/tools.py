@@ -655,7 +655,7 @@ def monitor_job(job_id: str, pid: int, meta_path: str):
                 with open(meta_path, "w") as f:
                     json.dump(meta, f, indent=2)
                 break
-        time.sleep(10)
+        time.sleep(5)
 
 
 def benchmark_test(dataset: str, max_workers: int = 5, save_every: int = 2) -> str:
@@ -678,7 +678,8 @@ def benchmark_test(dataset: str, max_workers: int = 5, save_every: int = 2) -> s
 
     cmd = [
         "python",
-        f"{benchmark_dir}/eval_runner.py",
+        #f"{benchmark_dir}/eval_runner.py",
+        "../benchmark/eval_runner.py",
         "--mode",
         "eval",
         "--base-url",
@@ -930,7 +931,8 @@ def medbench_run(dataset: str, max_workers: int = 5) -> str:
 
     cmd = [
         "python",
-        f"{benchmark_dir}/eval_runner.py",
+        #f"{benchmark_dir}/eval_runner.py",
+        "../benchmark/eval_runner.py",
         "--mode",
         "medbench",
         "--base-url",

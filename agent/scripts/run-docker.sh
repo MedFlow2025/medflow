@@ -28,6 +28,8 @@ fi
 docker run -itd  \
     -v ${HOST_WORKSPACE}:${DOCKER_WORKSPACE} \
     -v /root/.ssh:/root/.ssh \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v /usr/bin/docker:/usr/bin/docker \
     --gpus all \
     --pid=host \
     --user=root \
@@ -42,3 +44,6 @@ docker run -itd  \
     -w=$DOCKER_WORKSPACE \
     $IMAGE_NAME:$IMAGE_VERSION \
     /bin/bash
+
+    #-v /etc/localtime:/etc/localtime \
+    #-v /etc/timezone:/etc/timezone \

@@ -13,7 +13,8 @@ ENV:
   START_SCRIPT: ../scripts/start-service.sh
   LOG_DIR: ../agent/scripts/logs/
   TEST_DIR: ../test/
-  BENCHMARK_DIR: ../benchmark
+  #BENCHMARK_DIR: ../benchmark
+  BENCHMARK_DIR: /home/workspace/tests
 
 RUNTIME:
   TENSOR_PARALLEL_SIZE: 4
