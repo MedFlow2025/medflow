@@ -10,7 +10,8 @@ from typing import Any, Dict, List, Optional
 from openai import OpenAI
 from pydantic import BaseModel
 
-os.makedirs("../benchmark/logs", exist_ok=True)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+os.makedirs(os.path.join(SCRIPT_DIR, "logs"), exist_ok=True)
 
 
 class OutputFormat(BaseModel):
@@ -102,19 +103,20 @@ def extract_answer_fallback(text: str, valid_options: List[str]) -> Optional[str
 
     return None
 
+
 def get_question_score_2024(question_index: int) -> float:
     """Score rule for 2024 dataset."""
     q = question_index + 1
 
-    if 1 <= q <= 40: #A型题(第1部分)
+    if 1 <= q <= 40:  # A型题(第1部分)
         return 1.5
-    elif 41 <= q <= 115: #A型题(第2部分)
+    elif 41 <= q <= 115:  # A型题(第2部分)
         return 2.0
-    elif 116 <= q <= 135: #B型题
+    elif 116 <= q <= 135:  # B型题
         return 1.5
-    elif 136 <= q <= 165: #X型题(多选题)
+    elif 136 <= q <= 165:  # X型题(多选题)
         return 2.0
-    else: #未知题型
+    else:  # 未知题型
         return 1.0
 
 
@@ -169,9 +171,9 @@ def call_model(
                 top_p=1,
                 max_tokens=4096,
                 response_format=OutputFormat,
-                timeout=timeout,
                 # extra_body={"chat_template_kwargs": {"enable_thinking": True}}
             )
+            # timeout=timeout,
             return resp.choices[0].message.parsed
 
         except Exception as e:
@@ -275,7 +277,14 @@ def run_eval(args):
 
                 if idx % args.save_every == 0:
                     save_partial(
-                        args.output, results, correct, invalid, f1_sum, total_score, total, idx
+                        args.output,
+                        results,
+                        correct,
+                        invalid,
+                        f1_sum,
+                        total_score,
+                        total,
+                        idx,
                     )
 
             print(f"[{idx}/{total}] done")
@@ -283,11 +292,15 @@ def run_eval(args):
             if args.sleep:
                 time.sleep(args.sleep)
 
-    save_partial(args.output, results, correct, invalid, f1_sum, total_score, total, total)
+    save_partial(
+        args.output, results, correct, invalid, f1_sum, total_score, total, total
+    )
     print("DONE")
 
 
-def save_partial(path, results, correct, invalid, f1_sum, total_score, total, processed):
+def save_partial(
+    path, results, correct, invalid, f1_sum, total_score, total, processed
+):
     if path is None:
         return
 
@@ -323,7 +336,7 @@ def call_model_medbench(
                 max_tokens=8192,
                 extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )
-            # timeout=timeout,
+                #timeout=timeout,
             return resp.choices[0].message.content.strip()
 
         except Exception as e:
@@ -333,21 +346,43 @@ def call_model_medbench(
     return f"ERROR: {last_error}"
 
 
-def process_one_medbench(input_path, output_path, client, model):
+def call_one_medbench(client, model, idx, obj):
+    question = obj.get("question", "")
+    answer = call_model_medbench(client, model, question)
+
+    obj["answer"] = answer
+
+    return idx, obj
+
+
+def process_one_medbench(input_path, output_path, client, model, max_workers: int = 1):
+    with open(input_path, "r", encoding="utf-8") as fin:
+        items = [(i, json.loads(line)) for i, line in enumerate(fin) if line.strip()]
+
+    max_workers = max(1, max_workers)
+    results = {}
+    next_write_idx = 0
+
     with (
-        open(input_path, "r", encoding="utf-8") as fin,
+        ThreadPoolExecutor(max_workers=max_workers) as executor,
         open(output_path, "w", encoding="utf-8") as fout,
     ):
-        for line in fin:
-            obj = json.loads(line)
+        futures = [
+            executor.submit(call_one_medbench, client, model, idx, obj)
+            for idx, obj in items
+        ]
 
-            question = obj.get("question", "")
+        for done, future in enumerate(as_completed(futures), start=1):
+            idx, obj = future.result()
+            results[idx] = obj
+            print(f"[{done}/{len(items)}] done")
 
-            answer = call_model_medbench(client, model, question)
-
-            obj["answer"] = answer
-
-            fout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+            while next_write_idx in results:
+                fout.write(
+                    json.dumps(results.pop(next_write_idx), ensure_ascii=False) + "\n"
+                )
+                fout.flush()
+                next_write_idx += 1
 
 
 def run_medbench(args):
@@ -364,12 +399,16 @@ def run_medbench(args):
 
             print(f"Processing {f}...")
 
-            process_one_medbench(input_path, output_path, client, args.model)
+            process_one_medbench(
+                input_path, output_path, client, args.model, args.max_workers
+            )
 
     else:
         base_name = os.path.basename(args.dataset)
         output_path = os.path.join(args.output, base_name)
-        process_one_medbench(args.dataset, output_path, client, args.model)
+        process_one_medbench(
+            args.dataset, output_path, client, args.model, args.max_workers
+        )
 
 
 if __name__ == "__main__":

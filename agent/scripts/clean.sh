@@ -6,7 +6,6 @@ UI_PORT=$3
 DATA_ANNOTATION_PORT=$4
 
 rm -rf  ../../src/*.json ../../src/*.xlsx
-rm -rf ./logs
 
 pid=$(ps -aux | grep vllm | grep ${VLLM_OPENAI_PORT} | grep -v 'grep ' | awk '{print $2}')
 if [ -n "$pid" ]; then

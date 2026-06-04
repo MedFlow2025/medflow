@@ -2,18 +2,18 @@
 
 IP=$1
 PORT=$2
-LOG_PATH=../test/logs/
-LOG_FILE=$LOG_PATH/hospitalguide.log
+LOG_PATH=${TEST_LOG_DIR:-../logs/tests/manual}
+LOG_FILE=${TEST_LOG_FILE:-${LOG_PATH}/hospitalguide.log}
 
 if [ -z "$IP" ] || [ -z "$PORT" ]; then
     echo "ERROR: $0 <SERVICE_HOST> <INFERENCE_PORT>"
     exit 1
 fi
 
-if [ ! -d "../test/logs" ]; then
-    mkdir -p ../test/logs
+if [ ! -d "$(dirname "$LOG_FILE")" ]; then
+    mkdir -p "$(dirname "$LOG_FILE")"
 fi
-echo "" > $LOG_FILE
+: > "$LOG_FILE"
 
 requests=(
     "simple|hospitalguide-simple.json"
@@ -41,8 +41,8 @@ for r in "${requests[@]}"; do
   fi
   echo "HTTP Status: 200 OK"
 
-  echo "$body" >> $LOG_FILE
-  echo "" >> $LOG_FILE
+  echo "$body" >> "$LOG_FILE"
+  echo "" >> "$LOG_FILE"
 done
 
 echo "Test Passed!"

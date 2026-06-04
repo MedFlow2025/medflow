@@ -2,8 +2,8 @@
 
 IP=$1
 PORT=$2
-LOG_PATH=../test/logs/
-LOG_FILE=$LOG_PATH/basicmedicalrecord.log
+LOG_PATH=${TEST_LOG_DIR:-../logs/tests/manual}
+LOG_FILE=${TEST_LOG_FILE:-${LOG_PATH}/basicmedicalrecord.log}
 
 URL="http://${IP}:${PORT}/inference?request_type=v2"
 
@@ -12,10 +12,10 @@ if [ -z "$IP" ] || [ -z "$PORT" ]; then
     exit 1
 fi
 
-if [ ! -d "../test/logs" ]; then
-    mkdir -p ../test/logs
+if [ ! -d "$(dirname "$LOG_FILE")" ]; then
+    mkdir -p "$(dirname "$LOG_FILE")"
 fi
-echo "" > $LOG_FILE
+: > "$LOG_FILE"
 
 echo "Running healthcheck on ${URL} ..."
 
@@ -45,8 +45,8 @@ fi
 turns=$(echo "$body" | grep -o "\"role\"" | wc -l)
 echo "Conversation Turns: $turns"
 
-echo "$body" >> $LOG_FILE
-echo "" >> $LOG_FILE
+echo "$body" >> "$LOG_FILE"
+echo "" >> "$LOG_FILE"
 
 echo "Test Passed!"
 exit 0
