@@ -33,3 +33,7 @@ nemo-toolkit[all]
 langchain==1.2.12
 langchain-openai==1.1.10
 yq==3.4.3
+absl-py
+langdetect
+nltk
+immutabledict

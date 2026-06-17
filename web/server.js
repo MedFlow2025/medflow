@@ -22,23 +22,23 @@ function getLocalIP() {
 }
 
 const app = express();
-const host = getLocalIP();
-const port = 7860;
-const inferport = 8013;
-const voiceport = 9007;
+const host = process.env.HOST_IP || getLocalIP();
+const port = Number(process.env.UI_PORT || 8860);
+const inferport = Number(process.env.INFERENCE_PORT || 8013);
+const voiceport = Number(process.env.VOICE_PORT || 9007);
 
 app.use(express.static(path.join(__dirname, '')));
 
 app.use('/api', createProxyMiddleware({
   target: `http://${host}:${inferport}`,
-  pathRewrite: {'^/api': ''},
+  pathRewrite: { '^/api': '' },
   changeOrigin: true,
   secure: false
 }));
 
 app.use('/voice', createProxyMiddleware({
   target: `http://${host}:${voiceport}`,
-  pathRewrite: {'^/voice': ''},
+  pathRewrite: { '^/voice': '' },
   changeOrigin: true,
   secure: false
 }));
