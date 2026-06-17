@@ -1,5 +1,5 @@
 PORTS:
-  VLLM_OPENAI_PORT: 7000
+  VLLM_OPENAI_PORT: 7111
   INFERENCE_PORT: 7013
   UI_PORT: 7860
   DATA_ANNOTATION_PORT: 7016
@@ -11,7 +11,8 @@ ENV:
   MODEL_NAME: model_medical_20250630
   MODEL_PATH: /home/workspace/medical_models/
   START_SCRIPT: ../scripts/start-service.sh
-  LOG_DIR: ../agent/logs/
+  #LOG_DIR: ../agent/logs/
+  LOG_DIR: /home/workspace/tests/logs/
   TEST_DIR: ../test/
   #BENCHMARK_DIR: ../benchmark/medical
   #GENERAL_BENCHMARK_DIR: ../benchmark/general

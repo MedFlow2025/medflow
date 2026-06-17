@@ -141,7 +141,7 @@ EOF
     echo "" >> $LOG_FILE
     
     echo "====== Starting server ======" >> $LOG_FILE
-    echo "vllm serve" ${MODEL_PATH} \
+    echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} vllm serve" ${MODEL_PATH} \
     "--served-model-name" ${MODEL_NAME} \
     "--host" ${HOST_IP} \
     "--port" ${VLLM_OPENAI_PORT} \
@@ -150,7 +150,7 @@ EOF
     "--enable-auto-tool-choice" \
     "--tool-call-parser hermes" \
     >> $LOG_FILE
-    nohup vllm serve ${MODEL_PATH} \
+    nohup env CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" vllm serve ${MODEL_PATH} \
     --served-model-name ${MODEL_NAME} \
     --host ${HOST_IP} \
     --port ${VLLM_OPENAI_PORT} \

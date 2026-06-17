@@ -1,0 +1,4 @@
+ROLE: controller
+HOST: 10.130.35.2
+PORT: 8899
+LLM_URL: http://10.130.39.6:6000/v1

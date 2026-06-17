@@ -1,0 +1,14 @@
+NODES:
+  main:
+    ENABLED: true
+    NAME: main
+    HOST: 10.130.35.2
+    TOOL_URL: http://10.130.35.2:8899/worker/tool
+    ROLE: worker
+
+  node1:
+    ENABLED: true
+    NAME: node1
+    HOST: 10.130.36.21
+    TOOL_URL: http://10.130.36.21:8899/worker/tool
+    ROLE: worker

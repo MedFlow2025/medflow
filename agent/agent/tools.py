@@ -9,6 +9,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from typing import Dict, Optional
 
@@ -18,6 +20,7 @@ from langchain.tools import tool
 
 CONFIG_FILE = "../config/service.yaml"
 DEFAULT_CONFIG_FILE = "../config/service.default.yaml"
+NODES_CONFIG_FILE = "../config/nodes.yaml"
 WHITELIST = {
     "PORTS.VLLM_OPENAI_PORT",
     "PORTS.INFERENCE_PORT",
@@ -55,6 +58,7 @@ LOG_FILES = {
 }
 MAX_OUTPUT_CHARS = 6000
 PROGRESS_UPDATE_INTERVAL = 5
+NODE_AGENT_TIMEOUT = 120
 
 
 def safe_output(text):
@@ -65,18 +69,261 @@ def safe_output(text):
 
 def get_service_log_root() -> str:
     CONFIG = show_config()
-    return os.path.normpath(f"../{CONFIG['ENV']['LOG_DIR']}")
+    log_dir = CONFIG["ENV"]["LOG_DIR"]
+    if os.path.isabs(log_dir):
+        return os.path.normpath(log_dir)
+    return os.path.normpath(f"../{log_dir}")
 
 
 def get_agent_root() -> str:
     return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
+def load_nodes_config() -> dict:
+    if not os.path.exists(NODES_CONFIG_FILE):
+        return {}
+    with open(NODES_CONFIG_FILE) as f:
+        data = yaml.safe_load(f) or {}
+    nodes = data.get("NODES", {})
+    return nodes if isinstance(nodes, dict) else {}
+
+
+def is_node_enabled(node: dict) -> bool:
+    value = node.get("ENABLED", True)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in {"false", "0", "no", "off", "disabled"}
+    return bool(value)
+
+
+def enabled_nodes() -> dict:
+    return {
+        name: node
+        for name, node in load_nodes_config().items()
+        if is_node_enabled(node)
+    }
+
+
+def resolve_node_config(node: str, require_enabled: bool = True) -> tuple[str, dict]:
+    key = str(node or "").strip()
+    if not key:
+        raise ValueError("node is required")
+
+    nodes = load_nodes_config()
+    if key in nodes:
+        node_cfg = nodes[key]
+        node_key = key
+    else:
+        matches = [
+            (name, item)
+            for name, item in nodes.items()
+            if str(item.get("NAME", "")).strip() == key
+            or str(item.get("HOST", "")).strip() == key
+        ]
+        if len(matches) != 1:
+            available = ", ".join(enabled_nodes().keys()) or "none"
+            raise ValueError(
+                f"Unknown node: {node}. Available enabled nodes: {available}"
+            )
+        node_key, node_cfg = matches[0]
+
+    if require_enabled and not is_node_enabled(node_cfg):
+        raise ValueError(f"Node disabled: {node_key}")
+    if not node_cfg.get("TOOL_URL") and not node_cfg.get("URL"):
+        raise ValueError(f"Node URL missing: {node_key}")
+    return node_key, node_cfg
+
+
+def save_nodes_config(nodes: dict) -> None:
+    with open(NODES_CONFIG_FILE, "w") as f:
+        yaml.safe_dump(
+            {"NODES": nodes},
+            f,
+            allow_unicode=True,
+            sort_keys=False,
+            default_flow_style=False,
+        )
+
+
+def set_node_enabled(node: str, enabled: bool) -> str:
+    nodes = load_nodes_config()
+    if not nodes:
+        return f"暂无节点配置: {NODES_CONFIG_FILE}"
+
+    node_key, _ = resolve_node_config(node, require_enabled=False)
+    current_enabled = is_node_enabled(nodes[node_key])
+    if current_enabled == enabled:
+        status = "启用" if enabled else "禁用"
+        return f"节点已处于{status}状态: {node_key}"
+
+    nodes[node_key]["ENABLED"] = bool(enabled)
+    save_nodes_config(nodes)
+    status = "启用" if enabled else "禁用"
+    return f"节点已{status}: {node_key}\n配置文件: {NODES_CONFIG_FILE}"
+
+
+def get_node_tool_url(node_url: str) -> str:
+    url = str(node_url or "").rstrip("/")
+    if url.endswith("/worker") or url.endswith("/inference_agent"):
+        return f"{url}/tool"
+    if url.endswith("/worker/tool") or url.endswith("/inference_agent/tool"):
+        return url
+    return f"{url}/worker/tool"
+
+
+def call_node_tool(
+    node: str,
+    tool_name: str,
+    args: Optional[dict] = None,
+    timeout: int = NODE_AGENT_TIMEOUT,
+) -> dict:
+    node_key, node_cfg = resolve_node_config(node)
+    tool_url = node_cfg.get("TOOL_URL") or get_node_tool_url(node_cfg.get("URL", ""))
+    payload = {
+        "tool": tool_name,
+        "args": args or {},
+    }
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        tool_url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Node tool HTTP error: node={node_key}, tool={tool_name}, "
+            f"status={e.code}, body={error_body}"
+        )
+    except urllib.error.URLError as e:
+        raise RuntimeError(
+            f"Node tool connection error: node={node_key}, url={tool_url}, error={e}"
+        )
+    except TimeoutError:
+        raise RuntimeError(
+            f"Node tool request timeout: node={node_key}, tool={tool_name}, timeout={timeout}s"
+        )
+
+    try:
+        result = json.loads(body)
+    except json.JSONDecodeError:
+        raise RuntimeError(
+            f"Node tool returned invalid JSON: node={node_key}, body={body[:1000]}"
+        )
+
+    result["_node_key"] = node_key
+    result["_node_tool_url"] = tool_url
+    return result
+
+
+def format_node_tool_response(node: str, response: dict) -> str:
+    lines = [
+        f"node={response.get('_node_key', node)}",
+        f"tool_url={response.get('_node_tool_url', '')}",
+        f"tool={response.get('tool', '')}",
+        f"status={response.get('status', '')}",
+        "",
+        str(response.get("result", "")),
+    ]
+    return "\n".join(lines).strip()
+
+
+def build_node_tool_response(node: str, response: dict) -> dict:
+    payload = response.get("data") if isinstance(response, dict) else {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    node_key = response.get("_node_key", node) if isinstance(response, dict) else node
+    node_data = {}
+    if payload.get("config") is not None:
+        node_data["config"] = payload["config"]
+    if payload.get("services") is not None:
+        node_data["services"] = payload["services"]
+
+    response_data = {"nodes": {}}
+    if node_data:
+        response_data["nodes"][node_key] = node_data
+
+    return {
+        "_tool_text": format_node_tool_response(node, response),
+        "_response_data": response_data,
+    }
+
+
+def append_start_target_hint(text: str, node: str) -> str:
+    lowered = str(text).lower()
+    if (
+        "insufficient_memory" not in lowered
+        and "显存不足" not in str(text)
+        and "低于最低需求" not in str(text)
+    ):
+        return text
+    hint = (
+        f"\n\n提示: 如果该节点资源不足，可调用 "
+        f"node_recommend_start_target(target_node='{node}') 推荐其他可用节点。"
+    )
+    if "node_recommend_start_target" in str(text):
+        return text
+    return str(text) + hint
+
+
+def parse_json_args(args_json: str) -> dict:
+    if not str(args_json or "").strip():
+        return {}
+    data = json.loads(args_json)
+    if not isinstance(data, dict):
+        raise ValueError("args_json must be a JSON object")
+    return data
+
+
+def node_is_worker(node_cfg: dict) -> bool:
+    role = str(node_cfg.get("ROLE", "worker")).strip().lower()
+    return "worker" in role or role in {"", "both"}
+
+
+def response_result_text(response: dict) -> str:
+    result = response.get("result", "")
+    if isinstance(result, dict):
+        return str(result.get("analysis", result))
+    return str(result)
+
+
+def service_status_has_running(status_text: str) -> bool:
+    return "RUNNING" in str(status_text)
+
+
+def parse_recommend_result(response: dict) -> dict:
+    result = response.get("result", {})
+    if not isinstance(result, dict):
+        return {
+            "ok": False,
+            "current_ok": False,
+            "recommended_gpus": "",
+            "recommended_tp": "",
+            "analysis": str(result),
+        }
+    return {
+        "ok": bool(result.get("ok")),
+        "current_ok": bool(result.get("current_ok")),
+        "recommended_gpus": str(result.get("recommended_gpus") or ""),
+        "recommended_tp": result.get("recommended_tp") or "",
+        "analysis": str(result.get("analysis") or ""),
+    }
+
+
 def format_agent_relative_path(path: str, base_dir: Optional[str] = None) -> str:
     if not path:
         return path
-    abs_path = path if os.path.isabs(path) else os.path.abspath(
-        os.path.join(base_dir or os.getcwd(), path)
+    abs_path = (
+        path
+        if os.path.isabs(path)
+        else os.path.abspath(os.path.join(base_dir or os.getcwd(), path))
     )
     try:
         rel_path = os.path.relpath(abs_path, get_agent_root())
@@ -259,6 +506,7 @@ def service_start_status_text(run_id: str = "latest") -> str:
 
     lines = [
         "服务启动状态:",
+        f"current_time={time.strftime('%Y-%m-%d %H:%M:%S')}",
         f"status={status_value}",
         f"stored_status={stored_status}",
         f"run_id={meta.get('run_id', run_id)}",
@@ -350,10 +598,18 @@ def service_status_data() -> dict:
         )
 
     lines.append("============================\n")
+    # lines.append(f"Web UI: https://{CONFIG['ENV']['HOST_IP']}:{CONFIG['PORTS']['UI_PORT']}")
     # return "\n".join(lines)
     return {
         "services": services,
         "text": "\n".join(lines),
+    }
+
+
+def build_local_tool_response(tool_text, response_data: Optional[dict] = None) -> dict:
+    return {
+        "_tool_text": str(tool_text),
+        "_response_data": response_data or {},
     }
 
 
@@ -378,12 +634,16 @@ def check_gpu_status() -> str:
     if "[ERROR]" in output:
         return "无法获取 GPU 状态，请确认 nvidia-smi 是否可用。"
 
-    lines = output.strip().split("\n")
+    lines = [line.strip() for line in output.strip().splitlines() if line.strip()]
 
     result = ["\n====== GPU Status ======"]
 
     for line in lines:
-        idx, name, gpu_bus_id, used, total, util = [x.strip() for x in line.split(",")]
+        parts = [x.strip() for x in line.split(",")]
+        if len(parts) != 6:
+            result.append(f"Skip unparsable GPU line: {line}")
+            continue
+        idx, name, gpu_bus_id, used, total, util = parts
 
         bus_id_to_idx[gpu_bus_id] = idx
         result.append(
@@ -396,11 +656,25 @@ def check_gpu_status() -> str:
     )
     process_output = run_command(cmd_process)
 
-    process_lines = process_output.strip().split("\n")
-
     result.append("\n====== GPU Processes ======")
+    process_lines = [
+        line.strip() for line in process_output.strip().splitlines() if line.strip()
+    ]
+    if (
+        not process_lines
+        or "[ERROR]" in process_output
+        or any("No running processes found" in line for line in process_lines)
+    ):
+        result.append("No running GPU processes found.")
+        result.append("========================\n")
+        return "\n".join(result)
+
     for line in process_lines:
-        gpu_bus_id, pid, name, used = [x.strip() for x in line.split(",")]
+        parts = [x.strip() for x in line.split(",")]
+        if len(parts) != 4:
+            result.append(f"Skip unparsable process line: {line}")
+            continue
+        gpu_bus_id, pid, name, used = parts
         result.append(
             f"GPU: {bus_id_to_idx.get(gpu_bus_id, 'Unknown')} | PID: {pid} {name} | GPU Memory Usage: {used} MiB"
         )
@@ -418,6 +692,443 @@ def get_local_ip():
     return ip
 
 
+def parse_float(value, default: Optional[float] = None) -> Optional[float]:
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def load_model_config(model_dir: str) -> dict:
+    config_path = os.path.join(model_dir, "config.json")
+    if not os.path.exists(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def get_text_model_config(model_cfg: dict) -> tuple[dict, list[str]]:
+    notes = []
+    if isinstance(model_cfg.get("text_config"), dict):
+        text_cfg = dict(model_cfg["text_config"])
+        notes.append("检测到嵌套 text_config，显存/参数估算按文本主干配置计算。")
+        if "tie_word_embeddings" not in text_cfg and "tie_word_embeddings" in model_cfg:
+            text_cfg["tie_word_embeddings"] = model_cfg["tie_word_embeddings"]
+        return text_cfg, notes
+    return model_cfg, notes
+
+
+def model_architecture_notes(root_cfg: dict, text_cfg: dict) -> tuple[list[str], bool]:
+    notes = []
+    uncertain = False
+    if root_cfg.get("vision_config") and root_cfg.get("language_model_only") is False:
+        notes.append("检测到多模态模型，估算只覆盖文本主干，视觉模块和额外 runtime 开销未精确计入。")
+        uncertain = True
+
+    layer_types = text_cfg.get("layer_types")
+    if isinstance(layer_types, list) and layer_types:
+        full_count = sum(1 for item in layer_types if item == "full_attention")
+        linear_count = sum(1 for item in layer_types if item == "linear_attention")
+        if linear_count:
+            notes.append(
+                f"检测到混合 attention 结构: full_attention={full_count}, "
+                f"linear_attention={linear_count}，KV cache 只能给参考值。"
+            )
+            uncertain = True
+    return notes, uncertain
+
+
+def normalize_precision(value: Optional[str]) -> str:
+    text = str(value or "bf16").strip().lower()
+    if text in {"bfloat16", "torch.bfloat16"}:
+        return "bf16"
+    if text in {"float16", "torch.float16", "half"}:
+        return "fp16"
+    if text in {"float32", "torch.float32"}:
+        return "fp32"
+    return text
+
+
+def detect_quantization(model_cfg: dict, env: dict) -> str:
+    explicit = str(env.get("QUANTIZATION", "") or "").strip().lower()
+    if explicit and explicit not in {"none", "null"}:
+        return explicit
+    quant_cfg = model_cfg.get("quantization_config")
+    if isinstance(quant_cfg, dict):
+        method = quant_cfg.get("quant_method") or quant_cfg.get("quantization_method")
+        if method:
+            return str(method).lower()
+        if quant_cfg.get("bits"):
+            return f"int{quant_cfg['bits']}"
+    if model_cfg.get("quantization_method"):
+        return str(model_cfg["quantization_method"]).lower()
+    return ""
+
+
+def bytes_per_param_for_model(precision: str, quantization: str = "") -> float:
+    quant = str(quantization or "").lower()
+    if "4" in quant or "awq" in quant or "gptq" in quant:
+        return 0.5
+    if "8" in quant or "fp8" in quant:
+        return 1
+    bytes_map = {
+        "fp32": 4,
+        "fp16": 2,
+        "bf16": 2,
+        "fp8": 1,
+        "int8": 1,
+        "int4": 0.5,
+    }
+    return bytes_map.get(normalize_precision(precision), 2)
+
+
+def bytes_per_kv_cache(precision: str) -> float:
+    dtype = normalize_precision(precision)
+    bytes_map = {
+        "fp32": 4,
+        "fp16": 2,
+        "bf16": 2,
+        "fp8": 1,
+        "int8": 1,
+    }
+    return bytes_map.get(dtype, 2)
+
+
+def estimate_params_from_config(model_cfg: dict) -> Optional[float]:
+    if not model_cfg:
+        return None
+
+    hidden = parse_float(model_cfg.get("hidden_size"))
+    layers = parse_float(model_cfg.get("num_hidden_layers"))
+    vocab = parse_float(model_cfg.get("vocab_size"), 0)
+    intermediate = parse_float(model_cfg.get("intermediate_size"))
+    if intermediate is None and hidden:
+        intermediate = hidden * 4
+
+    if not hidden or not layers or not intermediate:
+        return None
+
+    attention_heads = parse_float(model_cfg.get("num_attention_heads"))
+    kv_heads = parse_float(model_cfg.get("num_key_value_heads"), attention_heads)
+    head_dim = parse_float(model_cfg.get("head_dim"))
+    if head_dim is None and hidden and attention_heads:
+        head_dim = hidden / attention_heads
+
+    if attention_heads and kv_heads and head_dim:
+        q_params = hidden * attention_heads * head_dim
+        kv_params = 2 * hidden * kv_heads * head_dim
+        o_params = attention_heads * head_dim * hidden
+        attention_params = q_params + kv_params + o_params
+    else:
+        attention_params = 4 * hidden * hidden
+
+    num_experts = parse_float(model_cfg.get("num_experts") or model_cfg.get("n_routed_experts"))
+    moe_intermediate = parse_float(
+        model_cfg.get("moe_intermediate_size")
+        or model_cfg.get("moe_ffn_hidden_size")
+        or model_cfg.get("intermediate_size")
+    )
+    if num_experts and moe_intermediate:
+        mlp_params = num_experts * 3 * hidden * moe_intermediate
+    else:
+        mlp_params = 3 * hidden * intermediate
+
+    per_layer = attention_params + mlp_params
+    embedding_params = vocab * hidden
+    total = layers * per_layer + embedding_params
+    if model_cfg.get("tie_word_embeddings") is False:
+        total += embedding_params
+    return total / 1e9
+
+
+def get_model_max_len(model_cfg: dict, runtime: dict) -> tuple[int, str]:
+    for key in ["MAX_MODEL_LEN", "MODEL_MAX_LEN", "MAX_SEQ_LEN"]:
+        value = parse_float(runtime.get(key))
+        if value:
+            return int(value), f"service.yaml RUNTIME.{key}"
+
+    for key in [
+        "max_position_embeddings",
+        "model_max_length",
+        "max_sequence_length",
+        "seq_length",
+    ]:
+        value = parse_float(model_cfg.get(key))
+        if value:
+            return int(value), f"model config.json {key}"
+
+    return 4096, "default fallback"
+
+
+def estimate_kv_cache_mib(model_cfg: dict, profile: dict) -> tuple[int, str]:
+    hidden = parse_float(model_cfg.get("hidden_size"))
+    layers = parse_float(model_cfg.get("num_hidden_layers"))
+    attention_heads = parse_float(model_cfg.get("num_attention_heads"))
+    kv_heads = parse_float(model_cfg.get("num_key_value_heads"), attention_heads)
+    head_dim = parse_float(model_cfg.get("head_dim"))
+    if head_dim is None and hidden and attention_heads:
+        head_dim = hidden / attention_heads
+
+    if not layers or not kv_heads or not head_dim:
+        return 0, "KV cache 估算缺少 num_hidden_layers/num_key_value_heads/head_dim，未计入。"
+
+    max_model_len = int(profile["max_model_len"])
+    effective_layers = layers
+    layer_types = model_cfg.get("layer_types")
+    if isinstance(layer_types, list) and layer_types:
+        full_attention_layers = sum(1 for item in layer_types if item == "full_attention")
+        linear_attention_layers = sum(
+            1 for item in layer_types if item == "linear_attention"
+        )
+        if linear_attention_layers and full_attention_layers:
+            effective_layers = full_attention_layers
+        elif linear_attention_layers and not full_attention_layers:
+            effective_layers = 0
+
+    kv_bytes = (
+        2
+        * effective_layers
+        * max_model_len
+        * kv_heads
+        * head_dim
+        * float(profile["kv_cache_bytes"])
+    )
+    kv_mib = int(kv_bytes / 1024 / 1024)
+    note = (
+        "KV cache 按每张卡估算，包含 K/V、层数、KV heads、head_dim "
+        f"和 max_model_len={max_model_len}。"
+    )
+    if effective_layers != layers:
+        note += (
+            f" 检测到非标准 attention 层，KV cache 仅按 full_attention 层数 "
+            f"{int(effective_layers)}/{int(layers)} 给参考值。"
+        )
+    return kv_mib, note
+
+
+def get_model_memory_profile(cfg: dict) -> dict:
+    env = cfg.get("ENV", {})
+    runtime = cfg.get("RUNTIME", {})
+    model_dir = os.path.join(env.get("MODEL_PATH", ""), env.get("MODEL_NAME", ""))
+    root_model_cfg = load_model_config(model_dir)
+    model_cfg, config_notes = get_text_model_config(root_model_cfg)
+    arch_notes, architecture_uncertain = model_architecture_notes(
+        root_model_cfg, model_cfg
+    )
+
+    explicit_param = parse_float(env.get("MODEL_PARAM_B"))
+    estimated_param = estimate_params_from_config(model_cfg)
+    if explicit_param:
+        param_billion = explicit_param
+        param_source = "service.yaml ENV.MODEL_PARAM_B"
+    elif estimated_param:
+        param_billion = estimated_param
+        param_source = "model config.json estimate"
+    else:
+        param_billion = 72.0
+        param_source = "default fallback"
+
+    precision = normalize_precision(
+        env.get("PRECISION") or model_cfg.get("torch_dtype") or model_cfg.get("dtype")
+    )
+    quantization = detect_quantization(model_cfg, env)
+    buffer_ratio = parse_float(env.get("GPU_MEMORY_BUFFER_RATIO"), 0.2)
+    bytes_per_param = bytes_per_param_for_model(precision, quantization)
+    kv_cache_dtype = normalize_precision(
+        env.get("KV_CACHE_DTYPE") or env.get("VLLM_KV_CACHE_DTYPE") or precision
+    )
+    max_model_len, max_model_len_source = get_model_max_len(model_cfg, runtime)
+
+    profile = {
+        "model_dir": model_dir,
+        "root_model_cfg": root_model_cfg,
+        "model_cfg": model_cfg,
+        "architecture_notes": config_notes + arch_notes,
+        "architecture_uncertain": architecture_uncertain,
+        "param_billion": param_billion,
+        "param_source": param_source,
+        "precision": precision,
+        "quantization": quantization,
+        "bytes_per_param": bytes_per_param,
+        "buffer_ratio": buffer_ratio,
+        "kv_cache_dtype": kv_cache_dtype,
+        "kv_cache_bytes": bytes_per_kv_cache(kv_cache_dtype),
+        "max_model_len": max_model_len,
+        "max_model_len_source": max_model_len_source,
+    }
+    kv_cache_mib, kv_cache_note = estimate_kv_cache_mib(model_cfg, profile)
+    profile["kv_cache_mib"] = kv_cache_mib
+    profile["kv_cache_note"] = kv_cache_note
+    return profile
+
+
+def memory_margin_mib(profile: dict) -> int:
+    if profile.get("architecture_uncertain"):
+        return 20480
+    return 10240
+
+
+def estimate_required_memory_mib(profile: dict, tp_size: int) -> tuple[int, int]:
+    total_weight_bytes = (
+        float(profile["param_billion"]) * 1e9 * float(profile["bytes_per_param"])
+    )
+    total_weight_mib = int(total_weight_bytes / 1024 / 1024)
+    per_gpu_mib = total_weight_mib / max(int(tp_size), 1)
+    weight_with_buffer_mib = int(
+        per_gpu_mib * (1 + float(profile.get("buffer_ratio", 0.2)))
+    )
+    required_mib = weight_with_buffer_mib + int(profile.get("kv_cache_mib", 0))
+    return required_mib, total_weight_mib
+
+
+def get_gpu_memory_map() -> tuple[Optional[Dict[str, tuple]], Optional[str]]:
+    cmd = (
+        "nvidia-smi --query-gpu=index,memory.used,memory.total "
+        "--format=csv,noheader,nounits"
+    )
+    output = run_command(cmd)
+    if "[ERROR]" in output:
+        return None, "无法获取 GPU 信息，请确认 nvidia-smi 可用"
+
+    gpu_memory: Dict[str, tuple] = {}
+    for line in output.strip().splitlines():
+        if not line.strip():
+            continue
+        parts = [x.strip() for x in line.split(",")]
+        if len(parts) != 3:
+            continue
+        idx, used, total = parts
+        gpu_memory[idx] = (int(used), int(total))
+    return gpu_memory, None
+
+
+def generate_tp_candidates(max_gpus: int) -> list[int]:
+    candidates = []
+    for tp in [1, 2, 4, 8]:
+        if tp <= max_gpus and tp not in candidates:
+            candidates.append(tp)
+    return candidates or [1]
+
+
+def parse_visible_gpus(value: str) -> list[str]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        return [str(item).strip() for item in ast.literal_eval(text)]
+    return [item.strip() for item in text.split(",") if item.strip()]
+
+
+def describe_model_profile(profile: dict) -> list[str]:
+    lines = [
+        "模型摘要:",
+        f"- path={profile['model_dir']}",
+        (
+            f"- size≈{profile['param_billion']:.2f}B({profile['param_source']}), "
+            f"dtype={profile['precision']}, quant={profile['quantization'] or 'none'}"
+        ),
+        (
+            f"- max_model_len={profile['max_model_len']}({profile['max_model_len_source']}), "
+            f"kv_cache≈{profile['kv_cache_mib']} MiB/卡"
+        ),
+    ]
+    for note in profile.get("architecture_notes", []):
+        lines.append(f"注意: {note}")
+    lines.append(f"建议额外冗余: {memory_margin_mib(profile)} MiB/卡")
+    return lines
+
+
+def gpu_eval_status_text(item: dict) -> str:
+    if item.get("recommended_ok"):
+        return "满足保守预算"
+    if item.get("ok"):
+        return "满足最低需求"
+    return "低于最低需求"
+
+
+def format_gpu_budget_table(gpu_memory: Dict[str, tuple], mem_util: float) -> list[str]:
+    lines = ["GPU预算:"]
+    for idx, (used, total) in gpu_memory.items():
+        planned_limit = gpu_vllm_planned_limit_mib(total, mem_util)
+        budget = gpu_vllm_budget_mib(gpu_memory, idx, mem_util)
+        lines.append(
+            f"- GPU {idx}: total={total} MiB, used={used} MiB, "
+            f"vllm_limit={planned_limit} MiB, budget={budget} MiB"
+        )
+    return lines
+
+
+def gpu_vllm_budget_mib(
+    gpu_memory: Dict[str, tuple], gpu_id: str, mem_util: float
+) -> int:
+    used, total = gpu_memory[gpu_id]
+    planned_limit = int(total * mem_util)
+    return planned_limit - used
+
+
+def gpu_vllm_planned_limit_mib(total_mib: int, mem_util: float) -> int:
+    return int(total_mib * mem_util)
+
+
+def evaluate_gpu_selection(
+    gpu_ids: list[str],
+    tp_size: int,
+    gpu_memory: Dict[str, tuple],
+    profile: dict,
+    mem_util: float,
+) -> dict:
+    required_mib, total_mib = estimate_required_memory_mib(profile, tp_size)
+    margin_mib = memory_margin_mib(profile)
+    missing = [gid for gid in gpu_ids if gid not in gpu_memory]
+    if missing:
+        return {
+            "ok": False,
+            "reason": "gpu_not_exist",
+            "required_mib": required_mib,
+            "recommended_mib": required_mib + margin_mib,
+            "margin_mib": margin_mib,
+            "total_mib": total_mib,
+            "analysis": f"GPU 不存在: {','.join(missing)}",
+        }
+
+    details = []
+    ok = True
+    for gid in gpu_ids:
+        used, total = gpu_memory[gid]
+        planned_limit = gpu_vllm_planned_limit_mib(total, mem_util)
+        budget = gpu_vllm_budget_mib(gpu_memory, gid, mem_util)
+        if budget < required_mib:
+            ok = False
+        details.append(
+            {
+                "gpu": gid,
+                "used_mib": used,
+                "total_mib": total,
+                "vllm_planned_limit_mib": planned_limit,
+                "vllm_budget_mib": budget,
+                "recommended_mib": required_mib + margin_mib,
+                "ok": budget >= required_mib,
+                "recommended_ok": budget >= required_mib + margin_mib,
+            }
+        )
+
+    return {
+        "ok": ok,
+        "reason": "" if ok else "insufficient_memory",
+        "required_mib": required_mib,
+        "recommended_mib": required_mib + margin_mib,
+        "margin_mib": margin_mib,
+        "total_mib": total_mib,
+        "details": details,
+    }
+
+
 def recommend_gpu() -> dict:
     """
     Intelligently evaluate and recommend GPU resources.
@@ -433,112 +1144,155 @@ def recommend_gpu() -> dict:
 
     cfg = show_config()
 
-    visible = cfg["ENV"]["CUDA_VISIBLE_DEVICES"]
-    tp_size = int(cfg["RUNTIME"]["TENSOR_PARALLEL_SIZE"])
     mem_util = float(cfg["RUNTIME"].get("GPU_MEMORY_UTILIZATION", 0.9))
+    configured_visible = cfg["ENV"].get("CUDA_VISIBLE_DEVICES", "")
+    configured_gpus = parse_visible_gpus(configured_visible)
+    configured_tp = int(cfg["RUNTIME"].get("TENSOR_PARALLEL_SIZE", len(configured_gpus) or 1))
+    profile = get_model_memory_profile(cfg)
 
-    param_billion = float(cfg["ENV"].get("MODEL_PARAM_B", 72))
-    precision = cfg["ENV"].get("PRECISION", "bf16").lower()
+    gpu_memory, error = get_gpu_memory_map()
+    if error:
+        return {"ok": False, "analysis": error}
 
-    # ---------------------------------------------
-    # 1️. Estimate GPU Memory
-    # ---------------------------------------------
-    def estimate_per_gpu_memory_mib(
-        param_billion: float,
-        precision: str,
-        tp_size: int,
-        buffer_ratio: float = 0.25,
-    ) -> int:
-        bytes_map = {
-            "fp16": 2,
-            "bf16": 2,
-            "int8": 1,
-            "int4": 0.5,
-        }
-
-        bytes_per_param = bytes_map.get(precision, 2)
-
-        total_weight_bytes = param_billion * 1e9 * bytes_per_param
-        per_gpu_bytes = total_weight_bytes / tp_size
-
-        # per_gpu_bytes *= (1 + buffer_ratio)
-
-        return int(per_gpu_bytes / 1024 / 1024)
-
-    # ---------------------------------------------
-    # 2️. Get GPU Memory
-    # ---------------------------------------------
-    cmd = (
-        "nvidia-smi --query-gpu=index,memory.used,memory.total "
-        "--format=csv,noheader,nounits"
+    analysis_lines = describe_model_profile(profile)
+    analysis_lines.append("")
+    analysis_lines.append(
+        f"当前配置: CUDA_VISIBLE_DEVICES={','.join(configured_gpus) or '(empty)'}, "
+        f"TP={configured_tp}"
     )
-    output = run_command(cmd)
 
-    if "[ERROR]" in output:
-        return {"ok": False, "analysis": "无法获取 GPU 信息，请确认 nvidia-smi 可用"}
-
-    gpu_memory: Dict[str, tuple] = {}
-
-    for line in output.strip().split("\n"):
-        idx, used, total = [x.strip() for x in line.split(",")]
-        gpu_memory[idx] = (int(used), int(total))
-
-    # ---------------------------------------------
-    # 3️. Generate Candidate List
-    # ---------------------------------------------
-    analysis_lines = []
-    candidates = []
-
-    analysis_lines.append(f"模型规模: {param_billion}B | 精度: {precision}")
-
-    for idx, (used, total) in gpu_memory.items():
-        safe_limit = int(total * mem_util)
-        available = safe_limit - used
-        # available = total - used
-
+    current_ok = False
+    current_eval = None
+    if not configured_gpus:
+        analysis_lines.append("- 当前配置不可用: CUDA_VISIBLE_DEVICES 为空")
+    elif configured_tp != len(configured_gpus):
         analysis_lines.append(
-            f"GPU {idx}: 总 {total} MiB | 已用 {used} MiB | 可分配 {available} MiB"
+            f"- 当前配置不可用: TP={configured_tp} 与 GPU 数量={len(configured_gpus)} 不一致"
         )
+    else:
+        current_eval = evaluate_gpu_selection(
+            configured_gpus, configured_tp, gpu_memory, profile, mem_util
+        )
+        current_ok = bool(current_eval["ok"])
+        analysis_lines.append(
+            f"- 状态: {'可用' if current_ok else '不可用'} | "
+            f"单卡最低需求≈{current_eval['required_mib']} MiB | "
+            f"保守预算≈{current_eval['recommended_mib']} MiB"
+        )
+        gpu_status = ", ".join(
+            f"GPU{item['gpu']}:{gpu_eval_status_text(item)}"
+            for item in current_eval.get("details", [])
+        )
+        if gpu_status:
+            analysis_lines.append(f"- 当前GPU: {gpu_status}")
 
-        if available > 0:
-            candidates.append((idx, available))
+    analysis_lines.append("")
+    analysis_lines.extend(format_gpu_budget_table(gpu_memory, mem_util))
+
+    candidates = []
+    for idx, (used, total) in gpu_memory.items():
+        planned_limit = gpu_vllm_planned_limit_mib(total, mem_util)
+        budget = gpu_vllm_budget_mib(gpu_memory, idx, mem_util)
+        if budget > 0:
+            candidates.append((idx, budget, planned_limit, total))
 
     candidates.sort(key=lambda x: x[1], reverse=True)
-
     if not candidates:
-        return {"ok": False, "analysis": "\n".join(analysis_lines) + "\n没有可用 GPU。"}
+        return {
+            "ok": False,
+            "current_ok": current_ok,
+            "analysis": "\n".join(analysis_lines) + "\n没有可用 GPU。",
+        }
 
-    # ---------------------------------------------
-    # 4️. Try different TP combinations
-    # ---------------------------------------------
-    # max_tp = len(candidates)
-    # for tp in range(max_tp, 0, -2):
+    if current_ok and current_eval:
+        min_budget = min(
+            item["vllm_budget_mib"] for item in current_eval.get("details", [])
+        )
+        min_planned_limit = min(
+            item["vllm_planned_limit_mib"] for item in current_eval.get("details", [])
+        )
+        recommendation_status = (
+            "满足保守预算"
+            if min_budget >= current_eval["recommended_mib"]
+            else "满足最低启动需求，但低于保守推荐预算"
+        )
+        analysis_lines.append("")
+        analysis_lines.append("推荐:")
+        analysis_lines.append(f"- GPU={','.join(configured_gpus)}, TP={configured_tp}")
+        analysis_lines.append("- 理由: 当前 service.yaml 配置已满足最低启动需求，优先保持当前配置，避免无必要扩卡。")
+        analysis_lines.append(f"- 状态: {recommendation_status}")
+        analysis_lines.append(
+            f"- 权重总需求≈{current_eval['total_mib']} MiB, "
+            f"单卡最低需求≈{current_eval['required_mib']} MiB, "
+            f"保守预算≈{current_eval['recommended_mib']} MiB, "
+            f"组合最小budget≈{min_budget} MiB"
+        )
+        analysis_lines.append(
+            f"- 预计占用: nvidia-smi 通常接近 vLLM规划上限≈{min_planned_limit} MiB/卡，"
+            "并可能因 CUDA/NCCL/runtime 开销略高。"
+        )
+        analysis_lines.append("结论: 以上为启动前粗略分析，不代表一定可启动；最终以 vLLM 启动日志和 service_start_status 为准。")
 
-    # For model_medical_* models, TP=8/6 is not feasible, only try TP=4 and TP=2
-    for tp in range(4, 0, -2):
-        required = estimate_per_gpu_memory_mib(param_billion, precision, tp)
+        return {
+            "ok": True,
+            "current_ok": current_ok,
+            "recommended_gpus": ",".join(configured_gpus),
+            "recommended_tp": configured_tp,
+            "analysis": "\n".join(analysis_lines),
+        }
 
+    for tp in generate_tp_candidates(len(candidates)):
+        required, total_weight = estimate_required_memory_mib(profile, tp)
+        recommended_need = required + memory_margin_mib(profile)
         top_tp = candidates[:tp]
-        min_available = min([avail for _, avail in top_tp])
+        min_budget = min(item[1] for item in top_tp)
+        min_planned_limit = min(item[2] for item in top_tp)
 
-        if min_available >= required:
-            recommended_ids = [idx for idx, _ in top_tp]
-
-            analysis_lines.append(f"\n推荐 TP={tp}")
-            analysis_lines.append(f"单卡需求 ≈ {required} MiB")
-            analysis_lines.append(f"最小可用显存 ≈ {min_available} MiB")
+        if min_budget >= required:
+            recommended_ids = [item[0] for item in top_tp]
+            recommendation_status = (
+                "满足保守预算" if min_budget >= recommended_need else "满足最低启动需求，但低于保守推荐预算"
+            )
+            analysis_lines.append("")
+            analysis_lines.append("推荐:")
+            analysis_lines.append(f"- GPU={','.join(recommended_ids)}, TP={tp}")
+            analysis_lines.append(f"- 状态: {recommendation_status}")
+            analysis_lines.append(
+                f"- 权重总需求≈{total_weight} MiB, "
+                f"单卡最低需求≈{required} MiB, "
+                f"保守预算≈{recommended_need} MiB, "
+                f"组合最小budget≈{min_budget} MiB"
+            )
+            analysis_lines.append(
+                f"- 预计占用: nvidia-smi 通常接近 vLLM规划上限≈{min_planned_limit} MiB/卡，"
+                "并可能因 CUDA/NCCL/runtime 开销略高。"
+            )
+            analysis_lines.append("结论: 以上为启动前粗略分析，不代表一定可启动；最终以 vLLM 启动日志和 service_start_status 为准。")
 
             return {
                 "ok": True,
+                "current_ok": current_ok,
                 "recommended_gpus": ",".join(recommended_ids),
                 "recommended_tp": tp,
                 "analysis": "\n".join(analysis_lines),
             }
 
-    analysis_lines.append("\n所有 GPU 组合均无法满足显存需求。")
+    analysis_lines.append("")
+    analysis_lines.append("所有 GPU 组合均无法满足显存需求。")
+    for tp in generate_tp_candidates(len(candidates)):
+        required, _ = estimate_required_memory_mib(profile, tp)
+        recommended_need = required + memory_margin_mib(profile)
+        top_tp = candidates[:tp]
+        min_budget = min(item[1] for item in top_tp) if top_tp else 0
+        analysis_lines.append(
+            f"- TP={tp}: 单卡最低需求≈{required} MiB, "
+            f"保守预算≈{recommended_need} MiB, 当前组合最小budget≈{min_budget} MiB"
+        )
+    analysis_lines.append("结论: 以上为启动前粗略分析，不代表一定可启动；最终以 vLLM 启动日志和 service_start_status 为准。")
 
     return {
         "ok": False,
+        "current_ok": current_ok,
         "analysis": "\n".join(analysis_lines),
     }
 
@@ -560,8 +1314,7 @@ def check_config_validity() -> dict:
     start_script = cfg["ENV"]["START_SCRIPT"]
     tp_size = int(cfg["RUNTIME"]["TENSOR_PARALLEL_SIZE"])
     mem_util = float(cfg["RUNTIME"].get("GPU_MEMORY_UTILIZATION", 0.9))
-    param_billion = float(cfg["ENV"].get("MODEL_PARAM_B", 72))
-    precision = cfg["ENV"].get("PRECISION", "bf16").lower()
+    profile = get_model_memory_profile(cfg)
 
     # ------------------------------------------------
     # 1. PATH check
@@ -603,40 +1356,29 @@ def check_config_validity() -> dict:
             "analysis": "CUDA_VISIBLE_DEVICES 为空。\nUse gpu_status() to view the current GPU status and memory usage.",
         }
 
-    if visible.startswith("["):
-        visible = ",".join(map(str, ast.literal_eval(visible)))
+    try:
+        target_gpus = parse_visible_gpus(visible)
+    except Exception:
         return {
             "ok": False,
             "reason": "gpu_value_error",
-            "analysis": f"CUDA_VISIBLE_DEVICES 格式错误，应改为 '{visible}' ",
+            "analysis": "CUDA_VISIBLE_DEVICES 格式错误，应使用逗号分隔，例如 '0,1,2,3'",
         }
-
-    target_gpus = [x.strip() for x in visible.split(",") if x.strip()]
 
     # ------------------------------------------------
     # 4. Driver check
     # ------------------------------------------------
-    cmd = (
-        "nvidia-smi --query-gpu=index,memory.used,memory.total "
-        "--format=csv,noheader,nounits"
-    )
-    output = run_command(cmd)
-    if "[ERROR]" in output:
+    gpu_memory, gpu_error = get_gpu_memory_map()
+    if gpu_error:
         return {
             "ok": False,
             "reason": "nvidia_smi_failed",
-            "analysis": "NVIDIA driver 不可用或 nvidia-smi 执行失败",
+            "analysis": gpu_error,
         }
 
     # ------------------------------------------------
     # 5. GPU status
     # ------------------------------------------------
-    gpu_memory: Dict[str, tuple] = {}
-
-    for line in output.strip().split("\n"):
-        idx, used, total = [x.strip() for x in line.split(",")]
-        gpu_memory[idx] = (int(used), int(total))
-
     for gid in target_gpus:
         if gid not in gpu_memory:
             return {
@@ -662,48 +1404,47 @@ def check_config_validity() -> dict:
     # ------------------------------------------------
     # 7. GPU Memory Estimate
     # ------------------------------------------------
-    bytes_map = {
-        "fp16": 2,
-        "bf16": 2,
-        "int8": 1,
-        "int4": 0.5,
-    }
-    # dtype=torch.bfloat16,
-
-    bytes_per_param = bytes_map.get(precision, 2)
-
-    total_weight_bytes = param_billion * 1e9 * bytes_per_param
-    per_gpu_bytes = total_weight_bytes / tp_size
-    # per_gpu_bytes *= 1.25  # buffer 25%
-
-    required_mib = int(per_gpu_bytes / 1024 / 1024)
-    total_mib = int(total_weight_bytes / 1024 / 1024)
+    current_eval = evaluate_gpu_selection(
+        target_gpus, tp_size, gpu_memory, profile, mem_util
+    )
+    required_mib = current_eval["required_mib"]
+    total_mib = current_eval["total_mib"]
 
     analysis_lines = []
-    analysis_lines.append(f"模型 {param_billion}B | 精度 {precision}")
+    analysis_lines.append(f"模型路径: {profile['model_dir']}")
     analysis_lines.append(
-        f"采用 {tp_size} 张卡 | 总需求 ≈ {total_mib} MiB | 单卡需求 ≈ {required_mib} MiB"
+        f"模型 {profile['param_billion']:.2f}B ({profile['param_source']})"
+        f" | 精度 {profile['precision']} | 量化 {profile['quantization'] or 'none'}"
+    )
+    analysis_lines.append(
+        f"max_model_len={profile['max_model_len']} ({profile['max_model_len_source']})"
+        f" | 单卡 KV cache ≈ {profile['kv_cache_mib']} MiB"
+    )
+    analysis_lines.append(
+        f"采用 {tp_size} 张卡 | 权重总量 ≈ {total_mib} MiB "
+        f"| 单卡需求(权重分片+缓冲+KV cache) ≈ {required_mib} MiB"
+    )
+    analysis_lines.append(
+        f"说明: {profile['kv_cache_note']} 实际显存以 vLLM 启动结果为准。"
     )
 
-    out_of_memory = False
-    for gid in target_gpus:
-        used, total = gpu_memory[gid]
-        safe_limit = int(total * mem_util)
-        available = safe_limit - used
-        # available = total - used
+    for item in current_eval.get("details", []):
+        analysis_lines.append(
+            f"GPU {item['gpu']}: 总 {item['total_mib']} MiB | 已用 {item['used_mib']} MiB "
+            f"| vLLM规划上限 {item['vllm_planned_limit_mib']} MiB "
+            f"| vLLM剩余预算 {item['vllm_budget_mib']} MiB "
+            f"| {'满足保守预算' if item.get('recommended_ok') else ('满足最低需求' if item['ok'] else '低于最低需求')}"
+        )
 
-        analysis_lines.append(f"GPU {gid}: 可用 {available} MiB")
-
-        if available < required_mib:
-            out_of_memory = True
-
-    if out_of_memory:
+    if not current_eval["ok"]:
+        recommendation = recommend_gpu()
+        recommendation_text = str(recommendation.get("analysis", "")).strip()
         return {
             "ok": False,
-            "reason": "insufficient_memory",
+            "reason": current_eval["reason"] or "insufficient_memory",
             "analysis": "\n".join(analysis_lines)
-            + "\nUse gpu_recommend_allocation() to analyze current GPU status "
-            + "and provide optimal GPU allocation strategy.",
+            + "\n\n推荐分析:\n"
+            + (recommendation_text or "当前未能生成 GPU 推荐。"),
         }
 
     # ----------------------------
@@ -775,10 +1516,12 @@ def start_service() -> str:
         f"- vLLM OpenAI API: {ports['VLLM_OPENAI_PORT']}\n"
         f"- Inference Server: {ports['INFERENCE_PORT']}\n"
         f"- Web UI: {ports['UI_PORT']}\n"
-        f"- Case2Chat: {ports['DATA_ANNOTATION_PORT']}"
+        f"- Case2Chat: {ports['DATA_ANNOTATION_PORT']}\n"
+        "启动任务已提交不代表服务已启动完成。\n"
+        "除非用户明确要求继续执行其他操作，否则请直接返回以上信息，不要继续调用 service_status、service_start_status 或日志工具。"
     )
     # f"- Voice: {ports.get('VOICE_PORT', 9007)}"
-    # "可调用 service_start_status() 查看后台启动状态。"
+    # "您可以稍后调用 service_start_status() 查看推理启动状态。"
 
 
 def stop_service() -> str:
@@ -1082,7 +1825,9 @@ def run_all_test_job(
     atomic_write_json(status_file, meta)
 
 
-def start_test_job(test_name: str = "basicmedicalrecord.sh", run_all: bool = False) -> str:
+def start_test_job(
+    test_name: str = "basicmedicalrecord.sh", run_all: bool = False
+) -> str:
     CONFIG = show_config()
     TEST_DIR = CONFIG["ENV"]["TEST_DIR"]
     test_cwd = os.path.abspath(TEST_DIR)
@@ -1383,7 +2128,16 @@ def start_all_tests() -> str:
 
 def restart_service_stack() -> str:
     """Restart inference service stack."""
-    stop_service()
+    stop_result = stop_service()
+    time.sleep(10)
+    config_msg = check_config_validity()
+    if not config_msg["ok"]:
+        return (
+            "旧服务已停止，并已等待 15 秒释放 GPU 资源，但重启前检查不通过，新服务未启动。\n"
+            f"停止结果: {stop_result}\n"
+            f"原因: {config_msg['reason']}\n"
+            f"分析: {config_msg['analysis']}"
+        )
     return start_service()
 
 
@@ -1500,6 +2254,10 @@ def resolve_medical_choice_dataset_path(dataset: str) -> str:
     dataset = dataset.strip()
     if dataset.startswith("medical/choice/"):
         dataset = dataset.split("/", 2)[2]
+    if dataset.startswith("medical_choice/"):
+        dataset = dataset.split("/", 1)[1]
+    if dataset.startswith("choice/"):
+        dataset = dataset.split("/", 1)[1]
 
     relative = os.path.join("choice", dataset)
     path = resolve_benchmark_path(benchmark_dir, relative)
@@ -1569,9 +2327,8 @@ def run_medical_choice_benchmark(
     dataset_path = resolve_medical_choice_dataset_path(dataset)
 
     if not os.path.exists(dataset_path):
-        return (
-            f"Benchmark dataset not found: {dataset}\n"
-            + medical_choice_candidates(dataset)
+        return f"Benchmark dataset not found: {dataset}\n" + medical_choice_candidates(
+            dataset
         )
     if not os.path.isfile(dataset_path):
         return f"Benchmark dataset is not a file: {dataset}"
@@ -1746,7 +2503,9 @@ def medbench_list():
     return "\n".join(lines)
 
 
-def inspect_json_samples(path: str, sample_limit: int = 3) -> tuple[int, list[str], list]:
+def inspect_json_samples(
+    path: str, sample_limit: int = 3
+) -> tuple[int, list[str], list]:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -1788,9 +2547,8 @@ def inspect_jsonl_file(path: str, sample_limit: int = 3) -> tuple[int, list[str]
 def inspect_medical_choice_dataset(dataset: str) -> str:
     path = resolve_medical_choice_dataset_path(dataset)
     if not os.path.isfile(path):
-        return (
-            f"医疗选择题数据集不存在: {dataset}\n"
-            + medical_choice_candidates(dataset)
+        return f"医疗选择题数据集不存在: {dataset}\n" + medical_choice_candidates(
+            dataset
         )
 
     try:
@@ -1917,8 +2675,8 @@ def run_medbench_benchmark(dataset: str, max_workers: int = 5) -> str:
 
     if not os.path.exists(dataset_path):
         return (
-            f"Not Found: {dataset_path}. Please use `benchmark_list(benchmark_type=\"medbench\")` to check available MedBench jsonl files, \
-            or run the entire dataset: medical/medbench.\n"
+            f'Not Found: {dataset_path}. Please use `benchmark_list(benchmark_type="medbench")` to check available MedBench jsonl files, \
+            or run the entire dataset: medical/medbench.\n'
             + medbench_candidates(dataset)
         )
     if dataset.endswith(".jsonl"):
@@ -2178,9 +2936,12 @@ def medbench_progress_text(job_id: str) -> str:
 
     lines = []
     lines.append(f"任务: {job_id}")
+    lines.append(f"当前时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append(f"状态: {status}")
     lines.append(f"模型: {model}")
     lines.append(f"数据集: {dataset}")
+    lines.append(f"开始时间: {start_time}")
+    lines.append(f"结束时间: {end_time}")
     lines.append(f"结果位置: {format_agent_relative_path(output)}")
     lines.append(f"详细信息: {format_agent_relative_path(meta_file)}")
     lines.append(f"文件进度: {completed_files}/{total_files}")
@@ -2446,7 +3207,7 @@ def infer_benchmark_type(dataset: str, split: str = "default") -> str:
 
     if lowered.endswith(".jsonl") or "medbench" in lowered:
         return "medbench"
-    if lowered.endswith(".json") or lowered.startswith("medical/choice/"):
+    if lowered.endswith(".json") or lowered.startswith(("medical/choice/", "medical_choice/", "choice/")):
         return "medical_choice"
 
     choice_path = resolve_medical_choice_dataset_path(name)
@@ -2577,6 +3338,7 @@ def benchmark_report_text(job_id: str) -> str:
 
     lines = [
         "Benchmark报告:",
+        f"current_time={time.strftime('%Y-%m-%d %H:%M:%S')}",
         f"job_id={job_id}",
         f"status={meta.get('status')}",
         f"mode={mode}",
@@ -2647,19 +3409,21 @@ def get_ip() -> str:
 
 
 @tool
-def config_show() -> str:
+def config_show() -> dict:
     """Show current service config"""
-    return show_public_config()
+    config = show_public_config()
+    return build_local_tool_response(config, {"config": config})
 
 
 @tool
-def service_status() -> str:
+def service_status() -> dict:
     """Check current inference service ports.
 
     Use this for current running/stopped port status. If the user asks whether a
     background startup has completed, use service_start_status instead.
     """
-    return service_status_data()["text"]
+    status = service_status_data()
+    return build_local_tool_response(status["text"], {"services": status["services"]})
 
 
 @tool
@@ -2700,6 +3464,10 @@ def service_start() -> str:
     Prerequisites:
     1. Execute service_status() - if any services are running, run service_stop() before proceeding
     2. Execute config_check()
+
+    Startup runs asynchronously. Do not immediately call service_status after
+    this tool. Use service_start_status after a short wait or when the user asks
+    for startup progress.
     """
 
     return start_service()
@@ -2905,9 +3673,10 @@ def config_keys() -> str:
 
 
 @tool
-def config_update(key: str, value: str) -> str:
+def config_update(key: str, value: str) -> dict | str:
     """
     Update config value. Key must be one of config_keys().
+    CUDA_VISIBLE_DEVICES GPU count must equal RUNTIME.TENSOR_PARALLEL_SIZE.
     """
 
     valid = flatten_config_keys(show_config())
@@ -2926,7 +3695,8 @@ def config_update(key: str, value: str) -> str:
 
     if key == "ENV.CUDA_VISIBLE_DEVICES" and value.startswith("["):
         value = ",".join(map(str, ast.literal_eval(value)))
-    return update_config(key, value)
+    text = update_config(key, value)
+    return build_local_tool_response(text, {"config": show_public_config()})
 
 
 @tool
@@ -2957,6 +3727,8 @@ def benchmark_list(benchmark_type: str = "all") -> str:
 
     Call this before benchmark_run unless the user has already provided an exact
     dataset name copied from a recent benchmark_list or benchmark_inspect result.
+    For medical_choice datasets, use the exact file name shown in the list,
+    e.g. step1.json, not medical_choice/step1.json.
 
     Args:
     - benchmark_type: all, general, medical_choice, or medbench.
@@ -2974,7 +3746,8 @@ def benchmark_inspect(
 
     Args:
     - dataset: Dataset key or file name, e.g. mmlu, humaneval, 2024.json,
-      MedDiag.jsonl. To inspect the overall MedBench structure, use
+      step1.json, MedDiag.jsonl. For medical_choice, use the exact file name
+      from benchmark_list, not medical_choice/step1.json. To inspect the overall MedBench structure, use
       dataset="medical/medbench" or dataset="medbench"; do not invent a
       MedBench file name before calling benchmark_list.
     - benchmark_type: auto, general, medical_choice, or medbench.
@@ -3005,6 +3778,8 @@ def benchmark_run(
     - If benchmark_type or split is unclear, call benchmark_inspect first.
     - The dataset argument must be a dataset key or file name from
       benchmark_list/benchmark_inspect output.
+    - For medical_choice, dataset must be the exact file name such as
+      step1.json; do not add medical_choice/ prefix.
 
     Args:
     - dataset: Dataset key or file name.
@@ -3076,3 +3851,823 @@ def benchmark_stop(job_id: str) -> str:
     """
 
     return stop_benchmark_job(job_id)
+
+
+@tool
+def node_list(show_disabled: bool = False) -> str:
+    """
+    List configured inference agent nodes for multi-node multi-instance deployment.
+
+    This is a controller-side read-only tool. It only reads nodes.yaml and does
+    not call remote nodes, start services, stop services, or modify config.
+
+    Args:
+        show_disabled: include disabled nodes when true.
+    """
+
+    nodes = load_nodes_config()
+    if not nodes:
+        return f"暂无节点配置: {NODES_CONFIG_FILE}"
+
+    lines = ["多节点推理 Agent 配置:"]
+    for key, node in nodes.items():
+        enabled = is_node_enabled(node)
+        if not enabled and not show_disabled:
+            continue
+        lines.append(
+            " | ".join(
+                [
+                    f"node={key}",
+                    f"name={node.get('NAME', key)}",
+                    f"enabled={enabled}",
+                    f"role={node.get('ROLE', '')}",
+                    f"host={node.get('HOST', '')}",
+                    f"tool_url={node.get('TOOL_URL') or get_node_tool_url(node.get('URL', ''))}",
+                ]
+            )
+        )
+
+    if len(lines) == 1:
+        return "暂无启用节点。可设置 show_disabled=true 查看禁用节点。"
+    return "\n".join(lines)
+
+
+@tool
+def node_enable(node: str) -> str:
+    """
+    Enable one configured node for controller routing.
+
+    This only updates nodes.yaml on the controller. It does not start the remote
+    inference_agent or remote inference service. Use node_service_start to start
+    service on a node.
+
+    Args:
+        node: node key/name/host from nodes.yaml.
+    """
+
+    return set_node_enabled(node, True)
+
+
+@tool
+def node_disable(node: str) -> str:
+    """
+    Disable one configured node from controller routing.
+
+    This only updates nodes.yaml on the controller. It does not stop the remote
+    inference_agent or remote inference service. If the remote node currently has
+    inference services running, this tool refuses to disable it; use
+    node_service_stop first.
+
+    Args:
+        node: node key/name/host from nodes.yaml.
+    """
+
+    node_key, node_cfg = resolve_node_config(node, require_enabled=False)
+    role = str(node_cfg.get("ROLE", "")).strip().lower()
+    if "controller" in role:
+        return (
+            f"节点 {node_key} 是 controller 节点，不能禁用。\n"
+            "如果需要停止该节点上的推理服务，请使用 node_service_stop。"
+        )
+
+    if not is_node_enabled(load_nodes_config()[node_key]):
+        return f"节点已处于禁用状态: {node_key}"
+
+    response = call_node_tool(node_key, "service_status")
+    status_text = str(response.get("result", ""))
+    if "RUNNING" in status_text:
+        return (
+            f"节点 {node_key} 上仍有推理服务运行，不能禁用。\n"
+            "请先调用 node_service_stop 停止该节点服务，再禁用节点。\n\n"
+            f"当前状态：\n{status_text}"
+        )
+
+    return set_node_enabled(node_key, False)
+
+
+@tool
+def node_service_status(node: str) -> str:
+    """
+    Check one remote node's local inference service status.
+
+    Use this controller-side tool when the user explicitly specifies a node
+    such as node1/main or asks for multi-node service status. This reports the
+    remote node's current running/stopped port status.
+
+    Do not use this to check whether a submitted background startup has
+    completed; use node_service_start_status for startup progress.
+
+    Args:
+        node: node key/name/host from nodes.yaml.
+    """
+
+    response = call_node_tool(node, "service_status")
+    return build_node_tool_response(node, response)
+
+
+@tool
+def node_gpu_status(node: str) -> str:
+    """
+    Check one remote node's local GPU status.
+
+    Use this controller-side tool when the user explicitly specifies a node
+    such as node1/main or asks for multi-node GPU status. This only reports GPU
+    usage on the selected remote node; it does not modify config or start
+    service.
+
+    Args:
+        node: node key/name/host from nodes.yaml.
+    """
+
+    response = call_node_tool(node, "gpu_status")
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_config_show(node: str) -> str:
+    """
+    Show one remote node's local inference service config.
+
+    Use this controller-side tool when the user explicitly specifies a node
+    such as node1/main or asks for multi-node config. This reads the remote
+    node's service.yaml and returns its public service config.
+
+    Use node_config_update to modify config. Use node_config_keys first if the
+    exact key name is unclear.
+
+    Args:
+        node: node key/name/host from nodes.yaml.
+    """
+
+    response = call_node_tool(node, "config_show")
+    return build_node_tool_response(node, response)
+
+
+@tool
+def node_config_keys(node: str) -> str:
+    """
+    Return config keys that can be updated on one remote node.
+
+    Call this before node_config_update when the user gives an imprecise key
+    name such as "GPU", "TP", "model", or "port". The update key must be one of
+    the returned keys or a unique suffix accepted by the remote worker.
+    """
+
+    response = call_node_tool(node, "config_keys")
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_config_update(node: str, key: str, value: str) -> str:
+    """
+    Update one whitelisted config key on a remote node.
+
+    Use this controller-side tool only when the user explicitly specifies a node
+    and a config key/value. The remote node still enforces its own whitelist and
+    running-service checks.
+    CUDA_VISIBLE_DEVICES GPU count must equal RUNTIME.TENSOR_PARALLEL_SIZE.
+
+    Use this before node_service_start when the user asks to start a node with
+    specific runtime settings, such as:
+    - CUDA_VISIBLE_DEVICES / GPU ids
+    - RUNTIME.TENSOR_PARALLEL_SIZE / TP
+    - ENV.MODEL_NAME
+    - PORTS.*
+
+    For example, if the user says "start node1 with GPU 0 and TP=1", call:
+    - node_config_update(node1, "ENV.CUDA_VISIBLE_DEVICES", "0")
+    - node_config_update(node1, "RUNTIME.TENSOR_PARALLEL_SIZE", "1")
+    - node_service_start(node1)
+
+    Args:
+        node: node key/name/host from nodes.yaml.
+        key: config key, e.g. PORTS.VLLM_OPENAI_PORT.
+        value: new value as string.
+    """
+
+    response = call_node_tool(node, "config_update", {"key": key, "value": value})
+    return build_node_tool_response(node, response)
+
+
+@tool
+def node_port_status(node: str, port: int) -> str:
+    """
+    Check one port status on one remote node.
+
+    Use this for a specific remote port such as VLLM, inference API, UI, or data
+    annotation port. Use node_service_status when the user wants the full remote
+    service status.
+    """
+
+    response = call_node_tool(node, "port_status", {"port": port})
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_model_list(node: str) -> str:
+    """
+    List available models on one remote node.
+
+    Use this before node_config_update when the user wants to switch model but
+    has not provided the exact model name/path available on that node.
+    """
+
+    response = call_node_tool(node, "model_list")
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_config_check(node: str) -> str:
+    """
+    Check whether one remote node's service config is valid before startup.
+
+    This validates the selected node's current service.yaml, model path, GPU
+    allocation, tensor parallel size, and ports. It does not start, stop, or
+    modify anything.
+    """
+
+    response = call_node_tool(node, "config_check")
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_gpu_recommend_allocation(node: str) -> str:
+    """
+    Recommend GPU allocation for one remote node.
+
+    Use this when deciding which GPUs and tensor parallel size to use on that
+    node. This is analysis only: it does not update CUDA_VISIBLE_DEVICES, does
+    not update TENSOR_PARALLEL_SIZE, and does not start service. After choosing
+    a recommendation, call node_config_update for the required config keys, then
+    node_service_start.
+    """
+
+    response = call_node_tool(node, "gpu_recommend_allocation")
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_recommend_start_target(target_node: str = "auto") -> str:
+    """
+    Recommend which enabled worker node should start inference service.
+
+    This controller-side tool only analyzes nodes. It does not modify config,
+    stop service, or start service. Use it when a requested node cannot start
+    or when the user asks which node/GPU should be used. Use this after
+    node_service_start fails because the requested node has insufficient GPU
+    memory.
+
+    Args:
+        target_node: preferred node key/name/host, or auto.
+    """
+
+    nodes = load_nodes_config()
+    if not nodes:
+        return f"暂无节点配置: {NODES_CONFIG_FILE}"
+
+    preferred_key = ""
+    if str(target_node or "auto").strip().lower() not in {"", "auto"}:
+        try:
+            preferred_key, _ = resolve_node_config(target_node)
+        except Exception as e:
+            return f"目标节点无效: {target_node}\nerror={e}"
+
+    candidates = []
+    skipped = []
+
+    for node_key, node_cfg in nodes.items():
+        if not is_node_enabled(node_cfg):
+            skipped.append(f"{node_key}: disabled")
+            continue
+        if not node_is_worker(node_cfg):
+            skipped.append(f"{node_key}: not worker")
+            continue
+
+        try:
+            status_response = call_node_tool(node_key, "service_status")
+            status_text = response_result_text(status_response)
+            if service_status_has_running(status_text):
+                skipped.append(f"{node_key}: service already running")
+                continue
+
+            recommend_response = call_node_tool(node_key, "gpu_recommend_allocation")
+            recommend = parse_recommend_result(recommend_response)
+            if not recommend["ok"]:
+                skipped.append(f"{node_key}: no usable GPU recommendation")
+                candidates.append(
+                    {
+                        "node": node_key,
+                        "ok": False,
+                        "current_ok": False,
+                        "reason": "gpu recommendation failed",
+                        "analysis": recommend["analysis"],
+                    }
+                )
+                continue
+
+            candidates.append(
+                {
+                    "node": node_key,
+                    "ok": True,
+                    "current_ok": recommend["current_ok"],
+                    "recommended_gpus": recommend["recommended_gpus"],
+                    "recommended_tp": recommend["recommended_tp"],
+                    "analysis": recommend["analysis"],
+                }
+            )
+        except Exception as e:
+            skipped.append(f"{node_key}: error={e}")
+
+    usable = [item for item in candidates if item.get("ok")]
+    if not usable:
+        lines = ["没有找到可推荐的启动节点。"]
+        if skipped:
+            lines.append("节点情况:")
+            lines.extend(f"- {item}" for item in skipped)
+        for item in candidates:
+            if item.get("analysis"):
+                lines.append(f"\n{item['node']} 分析:\n{item['analysis']}")
+        return "\n".join(lines)
+
+    def rank(item: dict) -> tuple[int, int, str]:
+        if preferred_key and item["node"] == preferred_key and item.get("current_ok"):
+            return (0, 0, item["node"])
+        if item.get("current_ok"):
+            return (1, 0 if item["node"] == preferred_key else 1, item["node"])
+        return (2, 0 if item["node"] == preferred_key else 1, item["node"])
+
+    best = sorted(usable, key=rank)[0]
+
+    lines = ["启动节点推荐:"]
+    if preferred_key:
+        target = next((item for item in candidates if item["node"] == preferred_key), None)
+        if target:
+            lines.append(
+                f"- 用户指定节点 {preferred_key}: "
+                f"{'当前配置可启动' if target.get('current_ok') else '当前配置不适合作为首选'}"
+            )
+        else:
+            lines.append(f"- 用户指定节点 {preferred_key}: 未进入可用候选")
+
+    lines.append(f"- 推荐节点: {best['node']}")
+    lines.append(
+        f"- 推荐配置: ENV.CUDA_VISIBLE_DEVICES={best['recommended_gpus']}, "
+        f"RUNTIME.TENSOR_PARALLEL_SIZE={best['recommended_tp']}"
+    )
+    if best.get("current_ok"):
+        lines.append("- 说明: 推荐节点当前 service.yaml 已满足最低启动需求，可直接调用 node_service_start。")
+    else:
+        lines.append("- 说明: 推荐节点需要先按推荐配置更新 service.yaml，再启动。")
+
+    lines.append("")
+    lines.append("后续操作建议:")
+    if not best.get("current_ok"):
+        lines.append(
+            f"1. node_config_update(node='{best['node']}', key='ENV.CUDA_VISIBLE_DEVICES', "
+            f"value='{best['recommended_gpus']}')"
+        )
+        lines.append(
+            f"2. node_config_update(node='{best['node']}', key='RUNTIME.TENSOR_PARALLEL_SIZE', "
+            f"value='{best['recommended_tp']}')"
+        )
+        lines.append(f"3. node_service_start(node='{best['node']}')")
+    else:
+        lines.append(f"1. node_service_start(node='{best['node']}')")
+        lines.append(f"2. node_service_start_status(node='{best['node']}', run_id='latest')")
+
+    lines.append("")
+    lines.append("候选节点摘要:")
+    for item in usable:
+        status = "current_ok" if item.get("current_ok") else "needs_config_update"
+        lines.append(
+            f"- {item['node']}: {status}, gpu={item.get('recommended_gpus')}, "
+            f"tp={item.get('recommended_tp')}"
+        )
+    if skipped:
+        lines.append("跳过节点:")
+        lines.extend(f"- {item}" for item in skipped)
+
+    return "\n".join(lines)
+
+
+@tool
+def node_service_start(node: str) -> str:
+    """
+    Start one remote node's local inference service.
+
+    Use this controller-side tool only when the user explicitly specifies a node
+    such as node1/main. The remote node will run its own service_start policy
+    checks before starting.
+
+    This tool only starts the service with the node's current service.yaml.
+    It does not modify CUDA_VISIBLE_DEVICES, TENSOR_PARALLEL_SIZE, model name,
+    ports, or any other config.
+
+    If the user requested any config change before startup, such as "use GPU 0",
+    "set TP=1", "switch model", or "change port", call node_config_update for
+    every requested config change first. Only call node_service_start after all
+    required node_config_update calls have succeeded.
+
+    If this tool returns blocked/insufficient_memory, call
+    node_recommend_start_target with the same node to find another available
+    node.
+
+    Startup runs asynchronously. Do not immediately call node_service_status
+    after this tool. Use node_service_start_status after a short wait or when
+    the user asks for startup progress.
+
+    Args:
+        node: node key/name/host from nodes.yaml.
+    """
+
+    response = call_node_tool(node, "service_start")
+    return append_start_target_hint(format_node_tool_response(node, response), node)
+
+
+@tool
+def node_service_start_status(node: str, run_id: str = "latest") -> str:
+    """
+    Check one remote node's latest service start task status.
+
+    Use this after node_service_start or node_service_restart when the user asks
+    whether startup has finished, whether startup succeeded, or what the startup
+    progress is.
+
+    Args:
+        node: node key/name/host from nodes.yaml.
+        run_id: service start run_id on that node, or latest.
+    """
+
+    response = call_node_tool(node, "service_start_status", {"run_id": run_id})
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_service_stop(node: str) -> str:
+    """
+    Stop one remote node's local inference service.
+
+    Use this controller-side tool when the user explicitly specifies a node such
+    as node1/main or asks to stop service on a remote node. This stops the
+    remote node's local service stack only; it does not disable the node in
+    nodes.yaml. Use node_disable separately if the user wants to disable routing
+    after service is stopped.
+
+    Args:
+        node: node key/name/host from nodes.yaml.
+    """
+
+    response = call_node_tool(node, "service_stop")
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_service_restart(node: str) -> str:
+    """
+    Restart one remote node's local inference service.
+
+    Use this controller-side tool when the user explicitly specifies a node such
+    as node1/main. The remote node restarts with its current service.yaml.
+
+    This tool does not modify GPU, TP, model, or port config. If the user asks
+    to change config and restart, call node_config_update for every requested
+    change first, then call node_service_restart. Use node_service_start_status
+    afterwards to check startup progress.
+
+    Args:
+        node: node key/name/host from nodes.yaml.
+    """
+
+    response = call_node_tool(node, "service_restart")
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_service_log_runs(node: str, limit: int = 10) -> str:
+    """
+    List recent service log runs on one remote node.
+
+    Use this to discover valid run_id values before calling
+    node_service_log_tail, node_service_log_search, or node_service_log_context
+    for historical logs. Use run_id="latest" only for the newest/current logs.
+    """
+
+    response = call_node_tool(node, "service_log_runs", {"limit": limit})
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_service_log_tail(
+    node: str,
+    service: str = "all",
+    lines: int = 80,
+    run_id: str = "latest",
+) -> str:
+    """
+    Summarize important service log messages on one remote node.
+
+    Use this to inspect errors, warnings, and recent log lines for one remote
+    startup run. If the user asks for historical logs and no run_id is clear,
+    call node_service_log_runs first.
+
+    Args:
+        node: node key/name/host from nodes.yaml.
+        service: one of start, vllm, inference, ui, web, case2chat, or all.
+        lines: number of recent lines to include.
+        run_id: service startup run id, or latest.
+    """
+
+    response = call_node_tool(
+        node,
+        "service_log_tail",
+        {"service": service, "lines": lines, "run_id": run_id},
+    )
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_service_log_search(
+    node: str,
+    keyword: str = "error",
+    service: str = "all",
+    lines: int = 20,
+    run_id: str = "latest",
+) -> str:
+    """
+    Search service logs on one remote node.
+
+    The keyword can be plain text or an extended regex and is matched
+    case-insensitively. Use service="all" to search all service logs on that
+    node. If the user asks for historical logs and no run_id is clear, call
+    node_service_log_runs first.
+    """
+
+    response = call_node_tool(
+        node,
+        "service_log_search",
+        {"keyword": keyword, "service": service, "lines": lines, "run_id": run_id},
+    )
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_service_log_context(
+    node: str,
+    service: str,
+    index: int,
+    window: int = 20,
+    run_id: str = "latest",
+) -> str:
+    """
+    Show service log context around a line number on one remote node.
+
+    Use this after node_service_log_tail or node_service_log_search returns a
+    specific line number and the user wants surrounding lines.
+    """
+
+    response = call_node_tool(
+        node,
+        "service_log_context",
+        {"service": service, "index": index, "window": window, "run_id": run_id},
+    )
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_service_test_list(node: str) -> str:
+    """
+    List service function test scripts on one remote node.
+
+    These are service tests such as basicmedicalrecord.sh, not benchmark
+    evaluation datasets. Use node_benchmark_list for benchmark datasets.
+    """
+
+    response = call_node_tool(node, "service_test_list")
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_service_test_run(
+    node: str, test_name: str = "basicmedicalrecord.sh"
+) -> str:
+    """
+    Run one service function test script on one remote node.
+
+    This starts a background test job for scripts such as
+    basicmedicalrecord.sh. It is not a benchmark evaluation. Use
+    node_service_test_status to check progress/result and node_service_test_stop
+    to stop it.
+    """
+
+    response = call_node_tool(
+        node,
+        "service_test_run",
+        {"test_name": test_name},
+    )
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_service_test_run_all(node: str) -> str:
+    """
+    Run all service function test scripts on one remote node.
+
+    This submits a background test-all job. Use node_service_test_status to
+    check per-script progress/result and node_service_test_stop to stop it.
+    Do not use this for benchmark datasets.
+    """
+
+    response = call_node_tool(node, "service_test_run_all")
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_service_test_status(
+    node: str, test_run_id: str = "latest", lines: int = 30
+) -> str:
+    """
+    Check service function test status on one remote node.
+
+    Args:
+        node: node key/name/host from nodes.yaml.
+        test_run_id: test run id, latest, or all for currently running tests.
+        lines: number of recent log lines to include.
+    """
+
+    response = call_node_tool(
+        node,
+        "service_test_status",
+        {"test_run_id": test_run_id, "lines": lines},
+    )
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_service_test_stop(node: str, test_run_id: str = "latest") -> str:
+    """
+    Stop a running service function test on one remote node.
+
+    Args:
+        node: node key/name/host from nodes.yaml.
+        test_run_id: test run id, or latest for the latest submitted test.
+    """
+
+    response = call_node_tool(
+        node,
+        "service_test_stop",
+        {"test_run_id": test_run_id},
+    )
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_benchmark_list(node: str, benchmark_type: str = "all") -> str:
+    """
+    List available benchmark evaluation datasets on one remote node.
+
+    Use this for model evaluation datasets, not service function tests. Call it
+    before node_benchmark_run unless the dataset name was copied exactly from a
+    recent node_benchmark_list or node_benchmark_inspect result.
+    For medical_choice datasets, use the exact file name shown in the list,
+    e.g. step1.json, not medical_choice/step1.json.
+
+    Args:
+        node: node key/name/host from nodes.yaml.
+        benchmark_type: all, general, medical_choice, or medbench.
+    """
+
+    response = call_node_tool(
+        node,
+        "benchmark_list",
+        {"benchmark_type": benchmark_type},
+    )
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_benchmark_inspect(
+    node: str,
+    dataset: str,
+    benchmark_type: str = "auto",
+    split: str = "default",
+) -> str:
+    """
+    Inspect one benchmark dataset on one remote node before running.
+
+    Use this when dataset type, split, or format is unclear. For MedBench
+    structure, use dataset="medical/medbench" or dataset="medbench"; do not
+    invent a MedBench file name before calling node_benchmark_list. For
+    medical_choice, use exact file names such as step1.json.
+    """
+
+    response = call_node_tool(
+        node,
+        "benchmark_inspect",
+        {"dataset": dataset, "benchmark_type": benchmark_type, "split": split},
+    )
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_benchmark_run(
+    node: str,
+    dataset: str,
+    benchmark_type: str = "auto",
+    split: str = "default",
+    max_workers: int = 5,
+    limit: int = 0,
+    save_every: int = 2,
+) -> str:
+    """
+    Run one benchmark evaluation job asynchronously on one remote node.
+
+    Requirements before calling:
+    - Do not invent dataset names.
+    - Call node_benchmark_list first unless the dataset name was copied exactly
+      from a recent node_benchmark_list or node_benchmark_inspect result.
+    - If benchmark_type or split is unclear, call node_benchmark_inspect first.
+    - This is for benchmark evaluation, not service function tests.
+    - For medical_choice, dataset must be the exact file name such as
+      step1.json; do not add medical_choice/ prefix.
+
+    Use node_benchmark_report with the returned job_id to check progress,
+    partial result, final metrics, log path, and output path.
+    """
+
+    response = call_node_tool(
+        node,
+        "benchmark_run",
+        {
+            "dataset": dataset,
+            "benchmark_type": benchmark_type,
+            "split": split,
+            "max_workers": max_workers,
+            "limit": limit,
+            "save_every": save_every,
+        },
+    )
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_benchmark_report(node: str, job_id: str) -> str:
+    """
+    Retrieve benchmark report by job_id on one remote node.
+
+    Use this for benchmark progress, result, score, completion state, or "how
+    is this job going". The job_id belongs to the selected remote node.
+    """
+
+    response = call_node_tool(node, "benchmark_report", {"job_id": job_id})
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_benchmark_jobs(node: str) -> str:
+    """
+    List benchmark jobs on one remote node.
+
+    Use this to find job_id values for node_benchmark_report or
+    node_benchmark_stop when the user did not provide a job_id.
+    """
+
+    response = call_node_tool(node, "benchmark_jobs")
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_benchmark_stop(node: str, job_id: str) -> str:
+    """
+    Stop one running benchmark job on one remote node.
+
+    This terminates the remote benchmark process. Partial results may be
+    incomplete. Use node_benchmark_jobs first if the job_id is unknown.
+    """
+
+    response = call_node_tool(node, "benchmark_stop", {"job_id": job_id})
+    return format_node_tool_response(node, response)
+
+
+@tool
+def node_tool_call(node: str, tool_name: str, args_json: str = "{}") -> str:
+    """
+    Call one tool directly on a specific remote inference agent node.
+
+    This is a fallback/debug controller-side tool. Do not use it when a specific
+    node_* wrapper exists, such as node_service_status, node_config_update,
+    node_service_log_tail, node_service_test_run, or node_benchmark_run.
+
+    Use this only when all conditions are true:
+    - The user explicitly names a node.
+    - No specific node_* wrapper exists for the requested operation.
+    - The exact remote worker tool name and arguments are known.
+    - Direct tool execution is intended; this does not call the remote LLM.
+
+    Args:
+        node: node key/name/host from nodes.yaml.
+        tool_name: local worker tool name to execute on that node.
+        args_json: JSON object string for tool arguments, e.g. {"service":"all"}.
+    """
+
+    response = call_node_tool(node, tool_name, parse_json_args(args_json))
+    return format_node_tool_response(node, response)

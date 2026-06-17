@@ -1,0 +1,4 @@
+ROLE: worker
+HOST: 10.130.36.21
+PORT: 8899
+LLM_URL: http://10.130.39.6:6000/v1
