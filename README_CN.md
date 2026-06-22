@@ -65,6 +65,7 @@
 | :----------: | :------: | :-------: |:---------------------------: |
 | Qingnang-72B |    Qwen2.5-72B-Instruct    |    HuggingFace    | [ModelScope](https://modelscope.cn/models/MedFlow/Qingnang-72B) 
 | Qingnang-9B |    GLM4-9B-Instruct    |    HuggingFace    | [ModelScope](https://modelscope.cn/models/MedFlow/Qingnang-9B) 
+| Qingnang-32B |    Qwen3-32B    |    HuggingFace    | [ModelScope](https://modelscope.cn/models/MedFlow/Qingnang-32B) 
 | Qingnang-ASR |    Whisper V3    |    HuggingFace    | [ModelScope](https://www.modelscope.cn/models/MedFlow/Qingnang-ASR)
 | Qingnang-TTS |    GPT-Sovits2    |    HuggingFace    | [ModelScope](https://www.modelscope.cn/models/MedFlow/Qingnang-TTS)
 
