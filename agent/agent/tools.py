@@ -28,6 +28,7 @@ WHITELIST = {
     "PORTS.DATA_ANNOTATION_PORT",
     "ENV.HOST_IP",
     "ENV.CUDA_VISIBLE_DEVICES",
+    "ENV.MASTER_PORT",
     "ENV.MODEL_NAME",
     "RUNTIME.TENSOR_PARALLEL_SIZE",
     "RUNTIME.MAX_TOKENS",
@@ -245,6 +246,8 @@ def build_node_tool_response(node: str, response: dict) -> dict:
         node_data["config"] = payload["config"]
     if payload.get("services") is not None:
         node_data["services"] = payload["services"]
+    if payload.get("benchmark") is not None:
+        node_data["benchmark"] = payload["benchmark"]
 
     response_data = {"nodes": {}}
     if node_data:
@@ -523,6 +526,12 @@ def service_start_status_text(run_id: str = "latest") -> str:
     error = meta.get("error")
     if error:
         lines.append(f"error={error}")
+
+    if status_value == "starting":
+        lines.append(
+            "note=服务仍在后台启动中。请把当前启动状态告知用户，不要连续调用 "
+            "service_start_status、service_status 或日志工具轮询；用户稍后询问时再查询。"
+        )
 
     return "\n".join(lines)
 
@@ -1531,6 +1540,61 @@ def stop_service() -> str:
     return "Service stopped!"
 
 
+def running_benchmark_jobs() -> list[dict]:
+    """Return benchmark jobs whose meta.json status is running."""
+    base = get_benchmark_log_dir()
+    if not os.path.isdir(base):
+        return []
+
+    jobs = []
+    for job_id in os.listdir(base):
+        meta_path = os.path.join(base, job_id, "meta.json")
+        if not os.path.exists(meta_path):
+            continue
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            continue
+        if meta.get("status") != "running":
+            continue
+        jobs.append(
+            {
+                "job_id": meta.get("job_id", job_id),
+                "dataset": meta.get("dataset", ""),
+                "mode": meta.get("mode", ""),
+                "model": meta.get("model", ""),
+                "start_time": meta.get("start_time", ""),
+                "output": format_agent_relative_path(meta.get("output", "")),
+            }
+        )
+
+    return sorted(jobs, key=lambda item: item.get("start_time", ""), reverse=True)
+
+
+def running_benchmark_jobs_text() -> str:
+    jobs = running_benchmark_jobs()
+    if not jobs:
+        return ""
+
+    lines = [
+        "检测到 benchmark 任务正在运行，暂不停止推理服务。",
+        "停止 benchmark 会中断正在运行的评测任务。",
+        "请先向用户确认是否停止以下 benchmark 任务；未经用户明确确认，不要调用 benchmark_stop，也不要继续停止推理服务：",
+    ]
+    for job in jobs:
+        lines.append(
+            "- "
+            f"job_id={job['job_id']} "
+            f"dataset={job['dataset']} "
+            f"mode={job['mode']} "
+            f"model={job['model']} "
+            f"start_time={job['start_time']} "
+            f"output={job['output']}"
+        )
+    return "\n".join(lines)
+
+
 def tail_logs(service: str = "start", lines: int = 30, run_id: str = "latest") -> str:
     """Summarize important messages in log."""
     paths = get_log_paths(service, run_id)
@@ -2410,7 +2474,6 @@ def run_medical_choice_benchmark(
 def list_benchmark_jobs_text() -> str:
     """List all benchmark jobs with their current status."""
 
-    cfg = show_config()
     base = get_benchmark_log_dir()
 
     if not os.path.exists(base):
@@ -2424,12 +2487,31 @@ def list_benchmark_jobs_text() -> str:
             continue
 
         meta = json.load(open(meta_path))
+        start_time = meta.get("start_time", "")
+        try:
+            sort_key = time.mktime(time.strptime(start_time, "%Y-%m-%d %H:%M:%S"))
+        except Exception:
+            try:
+                sort_key = int(str(meta.get("job_id", job_id)).split("_", 1)[0])
+            except Exception:
+                sort_key = os.path.getmtime(meta_path)
+        jobs.append((sort_key, meta))
 
-        jobs.append(
-            f"{meta['job_id']} | {meta['model']} | {meta['dataset']} | {meta['status']}"
+    if not jobs:
+        return "暂无任务"
+
+    lines = []
+    for idx, (_, meta) in enumerate(
+        sorted(jobs, key=lambda item: item[0], reverse=True), start=1
+    ):
+        latest = " latest" if idx == 1 else ""
+        lines.append(
+            f"#{idx}{latest} | {meta.get('job_id')} | {meta.get('start_time', '')} | "
+            f"{meta.get('model')} | {meta.get('dataset')} | {meta.get('status')} | "
+            f"output={format_agent_relative_path(meta.get('output', ''))}"
         )
 
-    return "\n".join(jobs) if jobs else "暂无任务"
+    return "\n".join(lines)
 
 
 def stop_benchmark_job(job_id: str) -> str:
@@ -2897,17 +2979,24 @@ def medbench_progress_text(job_id: str) -> str:
     status = meta.get("status", "unknown")
     dataset = meta.get("dataset", "")
     model = meta.get("model", "")
+    pid = meta.get("pid", "")
+    return_code = meta.get("return_code")
     # dataset_type = meta.get("dataset_type", "")
     start_time = meta.get("start_time", "")
     end_time = meta.get("end_time", "")
     progress = meta.get("progress", {})
     files = progress.get("files", [])
+    log = meta.get("log", "")
     output = meta.get("output", "")
 
     if not files:
         return f"""任务 {job_id}
 状态: {status}
+PID: {pid}
+返回码: {return_code}
 数据集: {dataset}
+日志位置: {format_agent_relative_path(log)}
+结果位置: {format_agent_relative_path(output)}
 （暂无进度信息）"""
 
     total_files = progress.get("total_files", len(files))
@@ -2940,8 +3029,11 @@ def medbench_progress_text(job_id: str) -> str:
     lines.append(f"状态: {status}")
     lines.append(f"模型: {model}")
     lines.append(f"数据集: {dataset}")
+    lines.append(f"PID: {pid}")
+    lines.append(f"返回码: {return_code}")
     lines.append(f"开始时间: {start_time}")
     lines.append(f"结束时间: {end_time}")
+    lines.append(f"日志位置: {format_agent_relative_path(log)}")
     lines.append(f"结果位置: {format_agent_relative_path(output)}")
     lines.append(f"详细信息: {format_agent_relative_path(meta_file)}")
     lines.append(f"文件进度: {completed_files}/{total_files}")
@@ -3180,7 +3272,7 @@ def run_general_benchmark_job(
         "benchmark_type=general\n"
         f"log_file={format_agent_relative_path(log_file)}\n"
         f"output={format_agent_relative_path(output_file)}\n"
-        "可调用 benchmark_report(job_id) 查看进度和结果。"
+        "任务已在后台运行。请先把 job_id 和输出路径告知用户；只有用户询问进度或结果时再调用 benchmark_report。"
     )
 
 
@@ -3395,11 +3487,136 @@ def benchmark_report_text(job_id: str) -> str:
                     lines.append(f"{key}={value}")
 
     if meta.get("status") == "running":
-        lines.append("note=任务仍在运行，以上为当前已保存的中间结果。")
+        lines.append(
+            "note=任务仍在后台运行，以上为当前已保存的中间结果。"
+            "不要连续轮询；请把当前进度、job_id 和输出路径告知用户，用户需要时再查询。"
+        )
     else:
         lines.append("note=任务已结束，以上为最终结果。")
 
     return "\n".join(lines)
+
+
+def benchmark_type_from_mode(mode: str) -> str:
+    return "medical_choice" if mode == "eval" else mode
+
+
+def benchmark_report_data(job_id: str, text: str) -> dict:
+    """Build structured benchmark report data from the same files as report text."""
+    data = {
+        "action": "report",
+        "job_id": job_id,
+        "current_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "text": str(text),
+    }
+    meta_path = os.path.join(get_benchmark_log_dir(), job_id, "meta.json")
+    if not os.path.exists(meta_path):
+        data.update(
+            {
+                "status": "not_found",
+                "error": f"job_id 不存在: {job_id}",
+            }
+        )
+        return data
+
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+    except Exception as e:
+        data.update(
+            {
+                "status": "error",
+                "error": f"读取 meta.json 失败: {e}",
+                "meta_path": format_agent_relative_path(meta_path),
+            }
+        )
+        return data
+
+    mode = meta.get("mode")
+    output_file = meta.get("output")
+    data.update(
+        {
+            "status": meta.get("status"),
+            "mode": mode,
+            "benchmark_type": benchmark_type_from_mode(mode),
+            "dataset": meta.get("dataset"),
+            "model": meta.get("model"),
+            "pid": meta.get("pid"),
+            "return_code": meta.get("return_code"),
+            "start_time": meta.get("start_time"),
+            "end_time": meta.get("end_time"),
+            "log": format_agent_relative_path(meta.get("log")),
+            "output": format_agent_relative_path(output_file),
+            "meta_path": format_agent_relative_path(meta_path),
+        }
+    )
+
+    if mode == "medbench":
+        data["note"] = "MedBench 任务只生成模型输出，不计算准确率。"
+        progress = meta.get("progress")
+        if isinstance(progress, dict):
+            data["progress_detail"] = progress
+            files = progress.get("files", {})
+            if isinstance(files, dict):
+                total_samples = 0
+                done_samples = 0
+                for stat in files.values():
+                    if not isinstance(stat, dict):
+                        continue
+                    total_samples += int(stat.get("total") or 0)
+                    done_samples += int(stat.get("done") or 0)
+                data["file_progress"] = {
+                    "total_files": progress.get("total_files", len(files)),
+                    "completed_files": progress.get("completed_files", 0),
+                }
+                data["sample_progress"] = {
+                    "total_samples": total_samples,
+                    "done_samples": done_samples,
+                    "percent": round(done_samples / total_samples * 100, 4)
+                    if total_samples
+                    else 0,
+                }
+        return data
+
+    if not output_file or not os.path.exists(output_file):
+        data["progress"] = None
+        data["note"] = "结果文件尚未生成，可稍后再查。"
+        return data
+
+    if os.path.isdir(output_file):
+        data["result_dir"] = format_agent_relative_path(output_file)
+        return data
+
+    try:
+        with open(output_file, "r", encoding="utf-8") as f:
+            result = json.load(f)
+    except Exception as e:
+        data["result_error"] = str(e)
+        return data
+
+    summary = result.get("summary", {})
+    if isinstance(summary, dict):
+        data["summary"] = summary
+        for key in ("total", "processed", "progress", "split", "task_type"):
+            if key in summary:
+                data[key] = summary[key]
+        metrics = summary.get("metrics")
+        if isinstance(metrics, dict):
+            data["metrics"] = metrics
+        else:
+            metric_keys = ["correct", "accuracy", "avg_f1", "invalid", "invalid_rate"]
+            metrics = {key: summary[key] for key in metric_keys if key in summary}
+            if metrics:
+                data["metrics"] = metrics
+
+    if meta.get("status") == "running":
+        data["note"] = (
+            "任务仍在后台运行，以上为当前已保存的中间结果。"
+            "不要连续轮询；请把当前进度、job_id 和输出路径告知用户，用户需要时再查询。"
+        )
+    else:
+        data["note"] = "任务已结束，以上为最终结果。"
+    return data
 
 
 @tool
@@ -3750,6 +3967,9 @@ def benchmark_inspect(
       from benchmark_list, not medical_choice/step1.json. To inspect the overall MedBench structure, use
       dataset="medical/medbench" or dataset="medbench"; do not invent a
       MedBench file name before calling benchmark_list.
+      For TruthfulQA, dataset="truthfulqa" means the default generation task;
+      do not replace it with truthfulqa-mc1 or truthfulqa-mc2 unless the user
+      explicitly asks for that mode.
     - benchmark_type: auto, general, medical_choice, or medbench.
     - split: General benchmark split. Use default unless needed.
     """
@@ -3780,6 +4000,14 @@ def benchmark_run(
       benchmark_list/benchmark_inspect output.
     - For medical_choice, dataset must be the exact file name such as
       step1.json; do not add medical_choice/ prefix.
+    - If service_start was just submitted and the service is still starting,
+      do not call this tool yet; ask the user to retry after startup is ready.
+    - For TruthfulQA, if the user says only "truthfulqa" without specifying a
+      mode, pass dataset="truthfulqa" unchanged. Do not infer mc1 or mc2 from
+      conversation context. Use truthfulqa-mc1 only when the user explicitly
+      asks for MC1, single-choice, multiple-choice accuracy, or choice
+      accuracy. Use truthfulqa-mc2 only when the user explicitly asks for MC2,
+      multi-select, or F1/partial-credit evaluation.
 
     Args:
     - dataset: Dataset key or file name.
@@ -3805,7 +4033,10 @@ def benchmark_report(job_id: str) -> str:
     score, completion state, or "how is this job going".
     """
 
-    return benchmark_report_text(job_id)
+    text = benchmark_report_text(job_id)
+    return build_local_tool_response(
+        text, {"benchmark": benchmark_report_data(job_id, text)}
+    )
 
 
 @tool
@@ -3848,6 +4079,8 @@ def benchmark_stop(job_id: str) -> str:
     - This operation is irreversible
     - Partial results (if any) may be incomplete or discarded
     - After stopping, benchmark result files may be incomplete
+    - Only call this when the user explicitly confirms stopping the benchmark.
+      Do not call it automatically just because service_stop was blocked.
     """
 
     return stop_benchmark_job(job_id)
@@ -4558,6 +4791,9 @@ def node_benchmark_inspect(
     structure, use dataset="medical/medbench" or dataset="medbench"; do not
     invent a MedBench file name before calling node_benchmark_list. For
     medical_choice, use exact file names such as step1.json.
+    For TruthfulQA, dataset="truthfulqa" means the default generation task; do
+    not replace it with truthfulqa-mc1 or truthfulqa-mc2 unless the user
+    explicitly asks for that mode.
     """
 
     response = call_node_tool(
@@ -4589,6 +4825,14 @@ def node_benchmark_run(
     - This is for benchmark evaluation, not service function tests.
     - For medical_choice, dataset must be the exact file name such as
       step1.json; do not add medical_choice/ prefix.
+    - If node_service_start was just submitted and the service is still starting,
+      do not call this tool yet; ask the user to retry after startup is ready.
+    - For TruthfulQA, if the user says only "truthfulqa" without specifying a
+      mode, pass dataset="truthfulqa" unchanged. Do not infer mc1 or mc2 from
+      conversation context. Use truthfulqa-mc1 only when the user explicitly
+      asks for MC1, single-choice, multiple-choice accuracy, or choice
+      accuracy. Use truthfulqa-mc2 only when the user explicitly asks for MC2,
+      multi-select, or F1/partial-credit evaluation.
 
     Use node_benchmark_report with the returned job_id to check progress,
     partial result, final metrics, log path, and output path.
@@ -4619,7 +4863,7 @@ def node_benchmark_report(node: str, job_id: str) -> str:
     """
 
     response = call_node_tool(node, "benchmark_report", {"job_id": job_id})
-    return format_node_tool_response(node, response)
+    return build_node_tool_response(node, response)
 
 
 @tool
@@ -4642,6 +4886,8 @@ def node_benchmark_stop(node: str, job_id: str) -> str:
 
     This terminates the remote benchmark process. Partial results may be
     incomplete. Use node_benchmark_jobs first if the job_id is unknown.
+    Only call this when the user explicitly confirms stopping the benchmark.
+    Do not call it automatically just because node_service_stop was blocked.
     """
 
     response = call_node_tool(node, "benchmark_stop", {"job_id": job_id})

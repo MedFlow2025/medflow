@@ -38,6 +38,7 @@ LOG_DIR=$(yq -r '.ENV.LOG_DIR' $CONFIG_FILE)
 MODEL_NAME=$(yq -r '.ENV.MODEL_NAME' $CONFIG_FILE)
 MODEL_PATH=$(yq -r '.ENV.MODEL_PATH' $CONFIG_FILE)${MODEL_NAME}
 export CUDA_VISIBLE_DEVICES=$(yq -r '.ENV.CUDA_VISIBLE_DEVICES' $CONFIG_FILE)
+MASTER_PORT=$(yq -r '.ENV.MASTER_PORT // 50121' $CONFIG_FILE)
 
 TENSOR_PARALLEL_SIZE=$(yq -r '.RUNTIME.TENSOR_PARALLEL_SIZE' $CONFIG_FILE)
 GPU_MEMORY_UTILIZATION=$(yq -r '.RUNTIME.GPU_MEMORY_UTILIZATION' $CONFIG_FILE)
@@ -134,6 +135,8 @@ EOF
     
     echo "" >> $LOG_FILE
     echo "CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES} >> $LOG_FILE
+    echo "VLLM_PORT="${MASTER_PORT} >> $LOG_FILE
+    echo "MASTER_PORT="${MASTER_PORT} >> $LOG_FILE
     echo "MODEL_NAME="${MODEL_NAME} >> $LOG_FILE
     echo "MODEL_PATH="${MODEL_PATH} >> $LOG_FILE
     echo "MODEL_URL="${MODEL_URL} >> $LOG_FILE
@@ -141,7 +144,7 @@ EOF
     echo "" >> $LOG_FILE
     
     echo "====== Starting server ======" >> $LOG_FILE
-    echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} vllm serve" ${MODEL_PATH} \
+    echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} VLLM_PORT=${MASTER_PORT} MASTER_PORT=${MASTER_PORT} vllm serve" ${MODEL_PATH} \
     "--served-model-name" ${MODEL_NAME} \
     "--host" ${HOST_IP} \
     "--port" ${VLLM_OPENAI_PORT} \
@@ -150,7 +153,7 @@ EOF
     "--enable-auto-tool-choice" \
     "--tool-call-parser hermes" \
     >> $LOG_FILE
-    nohup env CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" vllm serve ${MODEL_PATH} \
+    nohup env CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" VLLM_PORT="${MASTER_PORT}" MASTER_PORT="${MASTER_PORT}" vllm serve ${MODEL_PATH} \
     --served-model-name ${MODEL_NAME} \
     --host ${HOST_IP} \
     --port ${VLLM_OPENAI_PORT} \

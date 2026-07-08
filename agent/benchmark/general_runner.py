@@ -1,3 +1,4 @@
+
 import argparse
 import base64
 import csv
@@ -155,6 +156,23 @@ DATASETS = {
         "splits": ["validation"],
         "default_split": "validation",
         "metrics": ["record_only"],
+    },
+    "truthfulqa-mc1": {
+        "name": "TruthfulQA MC1",
+        "type": "choice",
+        "splits": ["validation"],
+        "default_split": "validation",
+        "metrics": ["accuracy", "invalid_rate"],
+    },
+    "truthfulqa-mc2": {
+        "name": "TruthfulQA MC2",
+        "type": "choice",
+        "splits": ["validation"],
+        "default_split": "validation",
+        "metrics": ["accuracy", "invalid_rate"],
+    },
+    "truthfulqa-multiple-choice": {
+        "alias_for": "truthfulqa-mc1",
     },
     "truthfulqa": {
         "alias_for": "truthfulqa-generation",
@@ -459,6 +477,40 @@ def iter_truthfulqa_generation(root: str, split: str) -> Iterable[dict]:
         }
 
 
+def iter_truthfulqa_mc1(root: str, split: str) -> Iterable[dict]:
+    yield from iter_truthfulqa_mc(root, split, "mc1_targets", "truthfulqa-mc1", "TruthfulQA MC1")
+
+
+def iter_truthfulqa_mc2(root: str, split: str) -> Iterable[dict]:
+    yield from iter_truthfulqa_mc(root, split, "mc2_targets", "truthfulqa-mc2", "TruthfulQA MC2")
+
+
+def iter_truthfulqa_mc(
+    root: str, split: str, target_field: str, id_prefix: str, dataset_name: str
+) -> Iterable[dict]:
+    path = ensure_root_path(
+        root, "TruthfulQA", "multiple_choice", f"{split}-00000-of-00001.parquet"
+    )
+    for idx, row in enumerate(read_parquet(path).to_dict("records")):
+        targets = to_builtin(row[target_field])
+        choices = targets.get("choices") or []
+        labels = targets.get("labels") or []
+        option_labels = CHOICE_LABELS[: len(choices)]
+        answer_labels = [
+            option_labels[label_idx]
+            for label_idx, label in enumerate(labels)
+            if int(label) == 1 and label_idx < len(option_labels)
+        ]
+        yield {
+            "id": f"{id_prefix}/{idx}",
+            "task_type": "choice",
+            "question": row["question"],
+            "options": dict(zip(option_labels, choices)),
+            "answer": "".join(answer_labels),
+            "meta": {"dataset": dataset_name},
+        }
+
+
 def drop_answer_references(answer: Any) -> List[str]:
     answer = to_builtin(answer)
     refs = []
@@ -728,6 +780,8 @@ LOADERS = {
     "gsm8k": iter_gsm8k,
     "squad": iter_squad,
     "truthfulqa-generation": iter_truthfulqa_generation,
+    "truthfulqa-mc1": iter_truthfulqa_mc1,
+    "truthfulqa-mc2": iter_truthfulqa_mc2,
     "drop": iter_drop,
     "gpqa": iter_gpqa,
     "math": iter_math,
@@ -958,10 +1012,18 @@ def extract_choice(text: str, valid_options: Iterable[str]) -> Optional[str]:
         if match and set(match.group(1)).issubset(set(options)):
             return match.group(1)
 
-    tokens = re.findall(r"\b[A-Z]\b", upper)
+    final_lines = [line.strip() for line in upper.splitlines() if line.strip()]
+    final_text = final_lines[-1] if final_lines else upper
+    tokens = re.findall(r"\b[A-Z]\b", final_text)
     matches = [token for token in tokens if token in options]
     if len(matches) == 1:
         return matches[0]
+    if len(matches) > 1:
+        deduped = []
+        for match in matches:
+            if match not in deduped:
+                deduped.append(match)
+        return "".join(deduped)
 
     return None
 
@@ -1610,11 +1672,25 @@ def score_sample(sample: dict, response: str, args=None) -> dict:
 
     if task_type == "choice":
         predicted = extract_choice(response, sample["options"].keys())
-        is_correct = predicted == sample["answer"]
+        answer = str(sample.get("answer", ""))
+        is_correct = predicted == answer
+        pred_set = set(predicted or "")
+        answer_set = set(answer)
+        overlap = len(pred_set & answer_set)
+        precision = overlap / len(pred_set) if pred_set else 0.0
+        recall = overlap / len(answer_set) if answer_set else 0.0
+        f1 = (
+            2 * precision * recall / (precision + recall)
+            if precision + recall
+            else 0.0
+        )
         return {
             "prediction": predicted,
             "is_correct": is_correct,
             "invalid": predicted is None,
+            "precision": round(precision, 4),
+            "recall": round(recall, 4),
+            "f1": round(f1, 4),
         }
 
     if task_type == "math":
@@ -1711,6 +1787,11 @@ def summarize(
             "invalid": invalid,
             "invalid_rate": round(invalid / processed, 4) if processed else 0,
         }
+        if task_type == "choice":
+            f1_sum = sum(float(x.get("f1", 0)) for x in details)
+            summary["metrics"]["avg_f1"] = (
+                round(f1_sum / processed, 4) if processed else 0
+            )
         if task_type == "bbh":
             task_stats = {}
             for item in details:

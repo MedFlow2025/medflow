@@ -71,7 +71,8 @@ INFERENCE_AGENT_PORT = int(
 os.environ["OPENAI_API_KEY"] = "EMPTY"
 
 llm = init_chat_model(
-    model="model_medical_20250630",
+    #model="model_medical_20250630",
+    model="Qwen3.6-27B",
     model_provider="openai",
     api_key="empty",
     base_url=VLLM_URL,
@@ -179,6 +180,7 @@ def empty_response_data() -> dict:
     return {
         "config": None,
         "services": None,
+        "benchmark": None,
         "nodes": {},
     }
 
@@ -189,6 +191,7 @@ def merge_response_data(left: Optional[dict], right: Optional[dict]) -> dict:
     if isinstance(left, dict):
         data["config"] = left.get("config")
         data["services"] = left.get("services")
+        data["benchmark"] = left.get("benchmark")
         if isinstance(left.get("nodes"), dict):
             data["nodes"] = dict(left["nodes"])
 
@@ -199,6 +202,8 @@ def merge_response_data(left: Optional[dict], right: Optional[dict]) -> dict:
         data["config"] = right["config"]
     if right.get("services") is not None:
         data["services"] = right["services"]
+    if right.get("benchmark") is not None:
+        data["benchmark"] = right["benchmark"]
 
     nodes = right.get("nodes")
     if isinstance(nodes, dict):
@@ -214,6 +219,8 @@ def merge_response_data(left: Optional[dict], right: Optional[dict]) -> dict:
                 merged_node["config"] = node_data["config"]
             if node_data.get("services") is not None:
                 merged_node["services"] = node_data["services"]
+            if node_data.get("benchmark") is not None:
+                merged_node["benchmark"] = node_data["benchmark"]
             data["nodes"][node] = merged_node
 
     return data
@@ -254,7 +261,8 @@ def llm_node(state: MessagesState):
                 "规则：\n"
                 "1. 当需要执行系统操作时必须调用工具。\n"
                 "2. 不要假设工具执行成功，必须等待 Tool 返回。\n"
-                "3. 不允许编造执行结果。"
+                "3. 不允许编造执行结果。\n"
+                "4. 工具返回后，必须用中文向用户总结工具结果；不要返回空内容。"
             )
         )
     ]
@@ -405,6 +413,12 @@ def policy_precheck(action: str, tool_map: Optional[dict] = None) -> tuple[bool,
             )
         return True, ""
 
+    if action == "service_stop":
+        benchmark_msg = running_benchmark_jobs_text()
+        if benchmark_msg:
+            return False, benchmark_msg
+        return True, ""
+
     if action in ["config_update", "config_restore"]:
         status_text, _ = split_tool_observation(tool_map["service_status"].invoke({}))
         if "RUNNING" in status_text:
@@ -545,11 +559,13 @@ def run_service_agent(
     new_messages = result["messages"]
     turn_messages = latest_turn_messages(new_messages)
 
-    final_answer = "no response"
+    final_answer = "操作已执行，但模型未生成最终回复。请稍后重试或查看状态。"
     for m in reversed(turn_messages):
-        if m.type == "ai":
-            # return m.content
-            final_answer = m.content.split("</think>")[-1].strip()
+        if isinstance(m, AIMessage):
+            content = str(m.content or "").split("</think>")[-1].strip()
+            if not content:
+                continue
+            final_answer = content
             break
 
     response = {
