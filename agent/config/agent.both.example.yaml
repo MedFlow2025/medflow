@@ -2,3 +2,11 @@ ROLE: both
 HOST: 10.130.35.2
 PORT: 8899
 LLM_URL: http://10.130.39.6:6000/v1
+LLM_MODEL: Qwen3.6-27B
+
+MEMORY:
+  # Available backends: memory, redis
+  BACKEND: redis
+  REDIS_URL: redis://127.0.0.1:6379/0
+  # 0 keeps checkpoints indefinitely; positive values expire after N minutes.
+  TTL_MINUTES: 0

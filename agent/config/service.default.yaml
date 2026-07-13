@@ -9,6 +9,8 @@ ENV:
   HOST_IP: 10.130.35.2
   CUDA_VISIBLE_DEVICES: 0,1,2,3
   MODEL_NAME: model_medical_20250630
+  # Model parameter count in billions. Leave empty to estimate from config.json.
+  MODEL_PARAM_B: ""
   MODEL_PATH: /home/workspace/medical_models/
   START_SCRIPT: ../scripts/start-service.sh
   #LOG_DIR: ../agent/logs/
@@ -36,4 +38,5 @@ ENV:
 RUNTIME:
   TENSOR_PARALLEL_SIZE: 4
   GPU_MEMORY_UTILIZATION: 0.8
+  GPU_UTILIZATION_THRESHOLD: 50
   MAX_TOKENS: 4096

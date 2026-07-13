@@ -1,4 +1,5 @@
 import argparse
+import concurrent.futures
 import operator
 import os
 import re
@@ -10,6 +11,7 @@ import uvicorn
 import yaml
 from fastapi import FastAPI
 from langchain.chat_models import init_chat_model
+from langchain_core.runnables import RunnableConfig
 from langchain.messages import (
     AIMessage,
     AnyMessage,
@@ -27,6 +29,34 @@ from typing_extensions import Annotated, TypedDict
 app = FastAPI()
 
 
+def patch_openai_reasoning_passthrough() -> None:
+    """Keep vLLM/OpenAI-compatible message.reasoning on LangChain AIMessage."""
+    try:
+        import langchain_openai.chat_models.base as openai_chat_base
+    except Exception:
+        return
+
+    original = getattr(openai_chat_base, "_convert_dict_to_message", None)
+    if original is None or getattr(original, "_medflow_reasoning_patch", False):
+        return
+
+    def _convert_dict_to_message_with_reasoning(message_dict):
+        message = original(message_dict)
+        if isinstance(message, AIMessage):
+            reasoning = message_dict.get("reasoning")
+            if reasoning is None:
+                reasoning = message_dict.get("reasoning_content")
+            if reasoning is not None:
+                message.additional_kwargs["reasoning"] = reasoning
+        return message
+
+    _convert_dict_to_message_with_reasoning._medflow_reasoning_patch = True
+    openai_chat_base._convert_dict_to_message = _convert_dict_to_message_with_reasoning
+
+
+patch_openai_reasoning_passthrough()
+
+
 class InferenceRequest(BaseModel):
     command: str
     user_id: Optional[str] = None
@@ -38,6 +68,8 @@ class InferenceRequest(BaseModel):
 class ToolInvokeRequest(BaseModel):
     tool: str
     args: dict[str, Any] = Field(default_factory=dict)
+    user_id: Optional[str] = None
+    thread_id: Optional[str] = None
 
 
 AGENT_CONFIG_FILE = os.path.abspath(
@@ -60,6 +92,9 @@ AGENT_ROLE = os.getenv("AGENT_ROLE", AGENT_CONFIG.get("ROLE", "worker")).strip()
 VLLM_URL = os.getenv(
     "AGENT_LLM_URL", AGENT_CONFIG.get("LLM_URL", "http://10.130.35.2:8111/v1")
 )
+LLM_MODEL = os.getenv(
+    "AGENT_LLM_MODEL", AGENT_CONFIG.get("LLM_MODEL", "Qwen3.6-27B")
+)
 INFERENCE_AGENT_HOST = os.getenv(
     "INFERENCE_AGENT_HOST", AGENT_CONFIG.get("HOST", "10.130.35.2")
 )
@@ -71,8 +106,7 @@ INFERENCE_AGENT_PORT = int(
 os.environ["OPENAI_API_KEY"] = "EMPTY"
 
 llm = init_chat_model(
-    #model="model_medical_20250630",
-    model="Qwen3.6-27B",
+    model=LLM_MODEL,
     model_provider="openai",
     api_key="empty",
     base_url=VLLM_URL,
@@ -87,6 +121,10 @@ worker_tools = [
     service_start,
     service_start_status,
     service_stop,
+    service_instance_list,
+    service_instance_status,
+    service_instance_tasks,
+    service_instance_stop,
     service_restart,
     config_show,
     config_update,
@@ -125,6 +163,10 @@ controller_tools = [
     node_service_start,
     node_service_start_status,
     node_service_stop,
+    node_service_instance_list,
+    node_service_instance_status,
+    node_service_instance_tasks,
+    node_service_instance_stop,
     node_service_restart,
     node_port_status,
     node_model_list,
@@ -145,7 +187,6 @@ controller_tools = [
     node_benchmark_report,
     node_benchmark_jobs,
     node_benchmark_stop,
-    #node_tool_call,
 ]
 
 if AGENT_ROLE in {"controller", "both"}:
@@ -160,20 +201,84 @@ model_with_tools = llm.bind_tools(tools)
 MAX_LLM_CALLS = 30
 MAX_TOOL_CALLS = 20
 TOOL_RESULT_LOG_CHARS = 2000
+AGENT_TIMEOUT_SECONDS = int(os.getenv("AGENT_TIMEOUT_SECONDS", "900"))
+AGENT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+
+MEMORY_CONFIG = AGENT_CONFIG.get("MEMORY", {}) if isinstance(AGENT_CONFIG.get("MEMORY"), dict) else {}
+MEMORY_BACKEND = os.getenv(
+    "MEDFLOW_AGENT_MEMORY_BACKEND",
+    str(MEMORY_CONFIG.get("BACKEND", "memory")),
+).strip().lower()
+REDIS_URL = os.getenv(
+    "MEDFLOW_AGENT_REDIS_URL",
+    str(MEMORY_CONFIG.get("REDIS_URL", "redis://127.0.0.1:6379/0")),
+)
+REDIS_TTL_MINUTES = int(
+    os.getenv(
+        "MEDFLOW_AGENT_REDIS_TTL_MINUTES",
+        str(MEMORY_CONFIG.get("TTL_MINUTES", 60 * 24 * 7)),
+    )
+)
+if REDIS_TTL_MINUTES < 0:
+    raise ValueError("MEMORY.TTL_MINUTES must be 0 or a positive integer")
+REDIS_CHECKPOINT_PREFIX = os.getenv(
+    "MEDFLOW_AGENT_REDIS_CHECKPOINT_PREFIX",
+    str(MEMORY_CONFIG.get("CHECKPOINT_PREFIX", "medflow_inference_checkpoint")),
+)
+REDIS_CHECKPOINT_WRITE_PREFIX = os.getenv(
+    "MEDFLOW_AGENT_REDIS_CHECKPOINT_WRITE_PREFIX",
+    str(
+        MEMORY_CONFIG.get(
+            "CHECKPOINT_WRITE_PREFIX", "medflow_inference_checkpoint_write"
+        )
+    ),
+)
 
 
-def get_llm_finish_reason(message: AnyMessage) -> str:
-    for attr in ("response_metadata", "generation_info", "additional_kwargs"):
-        metadata = getattr(message, attr, None) or {}
-        if not isinstance(metadata, dict):
-            continue
-        finish_reason = metadata.get("finish_reason")
-        if finish_reason:
-            return str(finish_reason)
-        nested = metadata.get("token_usage") or metadata.get("usage_metadata") or {}
-        if isinstance(nested, dict) and nested.get("finish_reason"):
-            return str(nested["finish_reason"])
-    return ""
+def build_checkpointer():
+    if MEMORY_BACKEND in {"", "memory", "inmemory", "in_memory"}:
+        print("[memory] backend=memory checkpointer=InMemorySaver", flush=True)
+        return InMemorySaver()
+
+    if MEMORY_BACKEND == "redis":
+        from langgraph.checkpoint.redis import RedisSaver
+
+        redis_options = {
+            "redis_url": REDIS_URL,
+            "checkpoint_prefix": REDIS_CHECKPOINT_PREFIX,
+            "checkpoint_write_prefix": REDIS_CHECKPOINT_WRITE_PREFIX,
+        }
+        if REDIS_TTL_MINUTES > 0:
+            redis_options["ttl"] = {
+                "default_ttl": REDIS_TTL_MINUTES,
+                "refresh_on_read": True,
+            }
+
+        checkpointer = RedisSaver(
+            **redis_options,
+        )
+        checkpointer.setup()
+        ttl_text = str(REDIS_TTL_MINUTES) if REDIS_TTL_MINUTES else "disabled"
+        print(
+            "[memory] backend=redis "
+            f"url={REDIS_URL} ttl_minutes={ttl_text} "
+            f"checkpoint_prefix={REDIS_CHECKPOINT_PREFIX}",
+            flush=True,
+        )
+        return checkpointer
+
+    raise ValueError(
+        "Unsupported memory backend: "
+        f"{MEMORY_BACKEND}. Use memory or redis."
+    )
+
+
+def run_with_timeout(fn, timeout_seconds: int, timeout_message: str):
+    future = AGENT_EXECUTOR.submit(fn)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except concurrent.futures.TimeoutError as exc:
+        raise TimeoutError(timeout_message) from exc
 
 
 def empty_response_data() -> dict:
@@ -235,6 +340,35 @@ def split_tool_observation(observation) -> tuple[str, dict]:
     return str(observation), empty_response_data()
 
 
+def get_reasoning_text(message: AnyMessage) -> str:
+    reasoning = None
+    for attr in ("additional_kwargs", "response_metadata"):
+        data = getattr(message, attr, None)
+        if isinstance(data, dict) and data.get("reasoning"):
+            reasoning = data.get("reasoning")
+            break
+    if not reasoning:
+        return ""
+    return str(reasoning).strip()
+
+
+def pretty_print_cli_message(message: AnyMessage) -> None:
+    reasoning = get_reasoning_text(message)
+    if not reasoning or not isinstance(message, AIMessage):
+        message.pretty_print()
+        return
+
+    original_content = message.content
+    content = str(original_content or "").strip()
+    message.content = f"<think>\n{reasoning}\n</think>"
+    if content:
+        message.content += f"\n\n{content}"
+    try:
+        message.pretty_print()
+    finally:
+        message.content = original_content
+
+
 def controller_response_data(data: Optional[dict]) -> dict:
     merged = merge_response_data(empty_response_data(), data)
     return {
@@ -247,6 +381,31 @@ class MessagesState(TypedDict):
     llm_calls: int
     tool_calls: int
     response_data: dict
+
+
+def graph_request_user_id(config: RunnableConfig) -> str:
+    current = current_request_user_id()
+    if current:
+        return current
+    configurable = config.get("configurable", {})
+    request_user_id = str(configurable.get("request_user_id") or "").strip()
+    if request_user_id:
+        return request_user_id
+    thread_id = str(configurable.get("thread_id") or "").strip()
+    return f"studio:{thread_id}" if thread_id else ""
+
+
+def graph_thread_id(config: RunnableConfig) -> str:
+    return str(config.get("configurable", {}).get("thread_id") or "").strip()
+
+
+def reset_turn_state(state: MessagesState) -> dict:
+    """Reset counters and response data once at the start of each graph run."""
+    return {
+        "llm_calls": 0,
+        "tool_calls": 0,
+        "response_data": empty_response_data(),
+    }
 
 
 def llm_node(state: MessagesState):
@@ -268,7 +427,11 @@ def llm_node(state: MessagesState):
     ]
 
     try:
-        response = model_with_tools.invoke(system_msg + state["messages"])
+        response = run_with_timeout(
+            lambda: model_with_tools.invoke(system_msg + state["messages"]),
+            AGENT_TIMEOUT_SECONDS,
+            "请求处理超时",
+        )
     except Exception as e:
         print("[LLM_ERROR] model invocation failed")
         print(traceback.format_exc())
@@ -292,16 +455,33 @@ def llm_node(state: MessagesState):
     }
 
 
-def tool_node(state: MessagesState):
+def tool_node(
+    state: MessagesState, config: RunnableConfig
+) -> Command[Literal["llm_node", END]]:
+    user_token = set_current_request_user_id(graph_request_user_id(config))
+    thread_token = set_current_request_thread_id(graph_thread_id(config))
+    try:
+        return _tool_node(state)
+    finally:
+        reset_current_request_thread_id(thread_token)
+        reset_current_request_user_id(user_token)
+
+
+def _tool_node(state: MessagesState):
     """Performs the tool call."""
 
-    if state.get("tool_calls", 0) >= MAX_TOOL_CALLS:
-        return {"messages": [AIMessage(content="Tools 调用次数超过限制，任务已终止。")]}
-    results = []
-
     last = state["messages"][-1]
-
     tool_calls = getattr(last, "tool_calls", [])
+    completed_tool_calls = state.get("tool_calls", 0)
+    if completed_tool_calls + len(tool_calls) > MAX_TOOL_CALLS:
+        return Command(
+            goto=END,
+            update={
+                "messages": [AIMessage(content="Tools 调用次数超过限制，任务已终止。")]
+            },
+        )
+
+    results = []
     response_data = merge_response_data(empty_response_data(), state.get("response_data"))
 
     for tool_call in tool_calls:
@@ -342,11 +522,14 @@ def tool_node(state: MessagesState):
             )
         )
 
-    return {
-        "messages": results,
-        "tool_calls": state.get("tool_calls", 0) + len(tool_calls),
-        "response_data": response_data,
-    }
+    return Command(
+        goto="llm_node",
+        update={
+            "messages": results,
+            "tool_calls": completed_tool_calls + len(tool_calls),
+            "response_data": response_data,
+        },
+    )
 
 
 def route_by_tool(
@@ -362,7 +545,19 @@ def route_by_tool(
     return END
 
 
-def policy_node(state: MessagesState) -> Command[Literal["tool_node", END]]:
+def policy_node(
+    state: MessagesState, config: RunnableConfig
+) -> Command[Literal["tool_node", END]]:
+    user_token = set_current_request_user_id(graph_request_user_id(config))
+    thread_token = set_current_request_thread_id(graph_thread_id(config))
+    try:
+        return _policy_node(state)
+    finally:
+        reset_current_request_thread_id(thread_token)
+        reset_current_request_user_id(user_token)
+
+
+def _policy_node(state: MessagesState) -> Command[Literal["tool_node", END]]:
     """Centralized policy enforcement."""
 
     last = state["messages"][-1]
@@ -370,7 +565,7 @@ def policy_node(state: MessagesState) -> Command[Literal["tool_node", END]]:
     tool_call = last.tool_calls[0]
     action = tool_call["name"]
 
-    allowed, message = policy_precheck(action)
+    allowed, message = policy_precheck(action, tool_args=tool_call.get("args", {}))
 
     if not allowed:
         return Command(
@@ -381,7 +576,11 @@ def policy_node(state: MessagesState) -> Command[Literal["tool_node", END]]:
     return Command(goto="tool_node")
 
 
-def policy_precheck(action: str, tool_map: Optional[dict] = None) -> tuple[bool, str]:
+def policy_precheck(
+    action: str,
+    tool_map: Optional[dict] = None,
+    tool_args: Optional[dict[str, Any]] = None,
+) -> tuple[bool, str]:
     """
     Centralized execution policy layer.
     Returns:
@@ -390,26 +589,22 @@ def policy_precheck(action: str, tool_map: Optional[dict] = None) -> tuple[bool,
     """
 
     tool_map = tool_map or tools_by_name
-
-    if action == "service_start":
-        status_text, _ = split_tool_observation(tool_map["service_status"].invoke({}))
-        if "RUNNING" in status_text:
-            return False, (
-                "检测到已有服务运行，已自动跳过启动。\n\n当前状态：\n"
-                + status_text
-            )
-
-        config_result = tool_map["config_check"].invoke({})
-        if not config_result["ok"]:
-            return False, (config_result["msg"])
+    tool_args = tool_args or {}
 
     if action in ["service_test_run", "service_test_run_all", "benchmark_run"]:
-        status_text, _ = split_tool_observation(tool_map["service_status"].invoke({}))
-        if "STOPPED" in status_text:
+        instance_id = str(tool_args.get("instance_id") or "latest").strip() or "latest"
+        status_tool = tool_map.get("service_instance_status")
+        if status_tool is not None:
+            instance_status, _ = split_tool_observation(
+                status_tool.invoke({"instance_id": instance_id})
+            )
+        else:
+            instance_status = ""
+        if "status=running" not in instance_status:
             task_name = "benchmark" if action == "benchmark_run" else "test"
             return False, (
-                f"检测到服务未运行，已跳过 {task_name}。\n\n当前状态：\n"
-                + status_text
+                f"检测到目标推理服务实例未运行，已跳过 {task_name}。\n\n当前实例状态：\n"
+                + instance_status
             )
         return True, ""
 
@@ -429,18 +624,18 @@ def policy_precheck(action: str, tool_map: Optional[dict] = None) -> tuple[bool,
 
 
 agent_builder = StateGraph(MessagesState)
+agent_builder.add_node("reset_turn_state", reset_turn_state)
 agent_builder.add_node("llm_node", llm_node)
 agent_builder.add_node("policy_node", policy_node)
 agent_builder.add_node("tool_node", tool_node)
-agent_builder.add_edge(START, "llm_node")
+agent_builder.add_edge(START, "reset_turn_state")
+agent_builder.add_edge("reset_turn_state", "llm_node")
 agent_builder.add_conditional_edges(
     "llm_node",
     route_by_tool,
     ["policy_node", END],
 )
-agent_builder.add_edge("policy_node", "tool_node")
-agent_builder.add_edge("tool_node", "llm_node")
-agent = agent_builder.compile(checkpointer=InMemorySaver())
+agent = agent_builder.compile(checkpointer=build_checkpointer())
 
 
 def normalize_thread_part(value: Optional[str], default: str = "") -> str:
@@ -542,19 +737,31 @@ def build_usage(messages: list[AnyMessage]) -> dict:
 
 
 def run_service_agent(
-    command: str, thread_id: str = "api", include_trace: bool = False
+    command: str,
+    thread_id: str = "api",
+    include_trace: bool = False,
+    user_id: Optional[str] = None,
 ):
+    user_token = set_current_request_user_id(user_id or thread_id)
+    thread_token = set_current_request_thread_id(thread_id)
     messages = [HumanMessage(content=command)]
 
-    result = agent.invoke(
-        {
-            "messages": messages,
-            "llm_calls": 0,
-            "tool_calls": 0,
-            "response_data": empty_response_data(),
-        },
-        {"configurable": {"thread_id": thread_id}},
-    )
+    try:
+        result = agent.invoke(
+            {
+                "messages": messages,
+                "response_data": empty_response_data(),
+            },
+            {
+                "configurable": {
+                    "thread_id": thread_id,
+                    "request_user_id": user_id or thread_id,
+                }
+            },
+        )
+    finally:
+        reset_current_request_thread_id(thread_token)
+        reset_current_request_user_id(user_token)
 
     new_messages = result["messages"]
     turn_messages = latest_turn_messages(new_messages)
@@ -584,13 +791,28 @@ def run_inference_agent_tool(req: ToolInvokeRequest):
     request_id = f"tool-{int(time.time() * 1000)}"
     tool_name = str(req.tool or "").strip()
     tool_args = req.args or {}
+    user_token = set_current_request_user_id(req.user_id or "")
+    thread_token = set_current_request_thread_id(req.thread_id or "")
     start = time.time()
+    try:
+        return _run_inference_agent_tool(req, request_id, tool_name, tool_args, start)
+    finally:
+        reset_current_request_thread_id(thread_token)
+        reset_current_request_user_id(user_token)
+
+
+def _run_inference_agent_tool(
+    req: ToolInvokeRequest,
+    request_id: str,
+    tool_name: str,
+    tool_args: dict[str, Any],
+    start: float,
+):
     print(
         f"\n[worker-tool-api][{request_id}] request role={AGENT_ROLE} "
-        f"tool={tool_name} args={tool_args}",
+        f"thread_id={current_request_thread_id()} tool={tool_name} args={tool_args}",
         flush=True,
     )
-
     if AGENT_ROLE not in {"worker", "both"}:
         return {
             "status": "error",
@@ -614,13 +836,16 @@ def run_inference_agent_tool(req: ToolInvokeRequest):
         duration = time.time() - start
         print(
             f"[worker-tool-api][{request_id}] response role={AGENT_ROLE} "
+            f"thread_id={current_request_thread_id()} "
             f"tool={tool_name} status=error duration={duration:.3f}s "
             f"result={preview_tool_result(response['result'])}",
             flush=True,
         )
         return response
 
-    allowed, message = policy_precheck(tool_name, worker_tools_by_name)
+    allowed, message = policy_precheck(
+        tool_name, worker_tools_by_name, tool_args=tool_args
+    )
     if not allowed:
         response = {
             "status": "blocked",
@@ -631,6 +856,7 @@ def run_inference_agent_tool(req: ToolInvokeRequest):
         duration = time.time() - start
         print(
             f"[worker-tool-api][{request_id}] response role={AGENT_ROLE} "
+            f"thread_id={current_request_thread_id()} "
             f"tool={tool_name} status=blocked duration={duration:.3f}s "
             f"result={preview_tool_result(response['result'])}",
             flush=True,
@@ -644,6 +870,7 @@ def run_inference_agent_tool(req: ToolInvokeRequest):
     except Exception as e:
         print(
             f"[worker-tool-api][{request_id}] error role={AGENT_ROLE} "
+            f"thread_id={current_request_thread_id()} "
             f"tool={tool_name} invocation failed",
             flush=True,
         )
@@ -662,6 +889,7 @@ def run_inference_agent_tool(req: ToolInvokeRequest):
     duration = time.time() - start
     print(
         f"[worker-tool-api][{request_id}] response role={AGENT_ROLE} "
+        f"thread_id={current_request_thread_id()} "
         f"tool={tool_name} status={status} duration={duration:.3f}s "
         f"result={preview_tool_result(result_text)}",
         flush=True,
@@ -695,7 +923,31 @@ def run_inference_agent(req: InferenceRequest):
         }
 
     try:
-        agent_result = run_service_agent(req.command, thread_id, req.include_trace)
+        agent_result = run_with_timeout(
+            lambda: run_service_agent(
+                req.command,
+                thread_id,
+                req.include_trace,
+                req.user_id,
+            ),
+            AGENT_TIMEOUT_SECONDS,
+            "请求处理超时",
+        )
+    except TimeoutError as e:
+        duration = time.time() - start
+        result_text = "请求处理时间较长，本次操作尚未完成，请稍后再试。"
+        print(
+            f"[controller-api][{request_id}] timeout role={AGENT_ROLE} "
+            f"thread_id={thread_id} duration={duration:.3f}s "
+            f"timeout={AGENT_TIMEOUT_SECONDS}s error={e}",
+            flush=True,
+        )
+        return {
+            "status": "timeout",
+            "thread_id": thread_id,
+            "result": result_text,
+            "data": controller_response_data(empty_response_data()),
+        }
     except Exception as e:
         duration = time.time() - start
         print(
@@ -738,10 +990,18 @@ def main():
 
         messages = [HumanMessage(content=str(user_input))]
 
-        result = agent.invoke(
-            {"messages": messages, "llm_calls": 0, "tool_calls": 0},
-            {"configurable": {"thread_id": "1"}},
-        )
+        cli_thread_id = "cli:1"
+        user_token = set_current_request_user_id(cli_thread_id)
+        try:
+            result = agent.invoke(
+                {
+                    "messages": messages,
+                    "response_data": empty_response_data(),
+                },
+                {"configurable": {"thread_id": cli_thread_id}},
+            )
+        finally:
+            reset_current_request_user_id(user_token)
 
         new_messages = result["messages"]
 
@@ -752,7 +1012,7 @@ def main():
                 break
 
         for m in new_messages[target_index:]:
-            m.pretty_print()
+            pretty_print_cli_message(m)
 
 
 if __name__ == "__main__":

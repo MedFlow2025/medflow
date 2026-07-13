@@ -49,6 +49,109 @@ VOICE_URL="http://"${HOST_IP}":"${VOICE_PORT}"/v1"
 
 MAX_ROUND=50
 
+resolve_run_log_dir() {
+    if [ -n "${SERVICE_RUN_LOG_DIR}" ]; then
+        echo "${SERVICE_RUN_LOG_DIR}"
+        return
+    fi
+
+    local config_name
+    local config_dir
+    config_name=$(basename "${CONFIG_FILE}")
+    config_dir=$(cd "$(dirname "${CONFIG_FILE}")" 2>/dev/null && pwd)
+    if [ "${config_name}" = "service.runtime.yaml" ] && [ -n "${config_dir}" ]; then
+        echo "${config_dir}"
+        return
+    fi
+
+    echo ""
+}
+
+kill_pid_tree() {
+    local pid=$1
+    if [ -z "${pid}" ] || ! kill -0 "${pid}" >/dev/null 2>&1; then
+        return
+    fi
+
+    local child
+    for child in $(pgrep -P "${pid}" 2>/dev/null); do
+        kill_pid_tree "${child}"
+    done
+
+    kill -TERM "${pid}" >/dev/null 2>&1 || true
+}
+
+force_kill_pid_tree() {
+    local pid=$1
+    if [ -z "${pid}" ] || ! kill -0 "${pid}" >/dev/null 2>&1; then
+        return
+    fi
+
+    local child
+    for child in $(pgrep -P "${pid}" 2>/dev/null); do
+        force_kill_pid_tree "${child}"
+    done
+
+    kill -KILL "${pid}" >/dev/null 2>&1 || true
+}
+
+stop_pid_file() {
+    local pid_file=$1
+    local name=$2
+    local expected=$3
+
+    if [ ! -f "${pid_file}" ]; then
+        return
+    fi
+
+    local pid
+    pid=$(cat "${pid_file}" 2>/dev/null)
+    if [ -z "${pid}" ]; then
+        rm -f "${pid_file}"
+        return
+    fi
+
+    if kill -0 "${pid}" >/dev/null 2>&1; then
+        if [ -n "${expected}" ]; then
+            local cmdline
+            cmdline=$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null)
+            if [[ "${cmdline}" != *"${expected}"* ]]; then
+                echo "Skip ${name} pid ${pid}: cmdline does not match ${expected}"
+                rm -f "${pid_file}"
+                return
+            fi
+        fi
+        echo "Stopping ${name} by pid ${pid}"
+        kill_pid_tree "${pid}"
+        sleep 2
+        if kill -0 "${pid}" >/dev/null 2>&1; then
+            echo "Force stopping ${name} by pid ${pid}"
+            force_kill_pid_tree "${pid}"
+        fi
+    fi
+
+    rm -f "${pid_file}"
+}
+
+stop_recorded_pids() {
+    local run_log_dir=$1
+    if [ -z "${run_log_dir}" ]; then
+        return
+    fi
+
+    local pid_dir="${run_log_dir}/pids"
+    if [ ! -d "${pid_dir}" ]; then
+        return
+    fi
+
+    stop_pid_file "${pid_dir}/start-service.pid" "start-service" "start-service.sh"
+    stop_pid_file "${pid_dir}/ui.pid" "web-ui" "npm"
+    stop_pid_file "${pid_dir}/web.pid" "web" "npm"
+    stop_pid_file "${pid_dir}/case2chat.pid" "case2chat" "case2chat"
+    stop_pid_file "${pid_dir}/inference.pid" "inference" "inference.py"
+    stop_pid_file "${pid_dir}/vllm.pid" "vllm" "vllm"
+}
+
 if [ ! -f "../../src/key.pem" ] || [ ! -f "../../src/cert.pem" ]; then
     openssl req -x509 -newkey rsa:4096 -keyout ../../src/key.pem -out ../../src/cert.pem \
     -sha256 -days 365 -nodes -subj "/C=CN/ST=B/L=B/O=B/OU=B/CN="${HOST_IP}
@@ -80,6 +183,7 @@ write_start_status() {
   "config_profile": "${CONFIG_PROFILE}",
   "config_file": "${CONFIG_FILE}",
   "log_dir": "${RUN_LOG_DIR}",
+  "pid_dir": "${PID_DIR}",
   "started_at": "${STARTED_AT}",
   "finished_at": ${finished_at},
   "ports": {
@@ -92,6 +196,42 @@ write_start_status() {
 }
 EOF
 }
+
+write_stop_status() {
+    local run_log_dir=$1
+    if [ -z "${run_log_dir}" ]; then
+        return
+    fi
+
+    local status_file="${run_log_dir}/status.json"
+    if [ ! -f "${status_file}" ]; then
+        return
+    fi
+
+    python3 - "${status_file}" <<'PY'
+import json
+import os
+import sys
+import time
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+except Exception as e:
+    print(f"Failed to read status file {path}: {e}")
+    sys.exit(0)
+
+data["status"] = "stopped"
+data["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+data["error"] = None
+
+tmp_path = path + ".tmp"
+with open(tmp_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+os.replace(tmp_path, path)
+PY
+}
     #"case2chat": ${DATA_ANNOTATION_PORT},
     #"voice": ${VOICE_PORT}
 
@@ -103,12 +243,16 @@ if [ "$ACTION" == "start" ]; then
     
     RUN_ID=${SERVICE_RUN_ID:-$(date +"%Y%m%d_%H%M%S")_$$}
     SERVICE_LOG_DIR=${LOG_DIR}/services
-    RUN_LOG_DIR=${SERVICE_LOG_DIR}/runs/${RUN_ID}
+    RUN_LOG_DIR=${SERVICE_RUN_LOG_DIR:-${SERVICE_LOG_DIR}/runs/${RUN_ID}}
+    PID_DIR=${SERVICE_PID_DIR:-${RUN_LOG_DIR}/pids}
+    mkdir -p $SERVICE_LOG_DIR
     mkdir -p $RUN_LOG_DIR
-    ln -sfnT runs/${RUN_ID} ${SERVICE_LOG_DIR}/latest
+    mkdir -p $PID_DIR
+    ln -sfnT ${RUN_LOG_DIR} ${SERVICE_LOG_DIR}/latest
     LOG_FILE=${RUN_LOG_DIR}/start-service.log
     STATUS_FILE=${RUN_LOG_DIR}/status.json
     STARTED_AT=$(date +"%Y-%m-%d %H:%M:%S")
+    echo $$ > ${PID_DIR}/start-service.pid
     write_start_status "starting" "null" "null"
     cat > ${SERVICE_LOG_DIR}/latest.json <<EOF
 {
@@ -128,6 +272,7 @@ EOF
     echo "VOICE_PORT="${VOICE_PORT} >> $LOG_FILE
     echo "RUN_ID="${RUN_ID} >> $LOG_FILE
     echo "RUN_LOG_DIR="${RUN_LOG_DIR} >> $LOG_FILE
+    echo "PID_DIR="${PID_DIR} >> $LOG_FILE
     echo "MAX_ROUND="${MAX_ROUND} >> $LOG_FILE
     echo "GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION} >> $LOG_FILE
     echo "TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE} >> $LOG_FILE
@@ -162,6 +307,7 @@ EOF
     --enable-auto-tool-choice  \
     --tool-call-parser hermes \
     > ${RUN_LOG_DIR}/vllm.log 2>&1 &
+    echo $! > ${PID_DIR}/vllm.pid
     wait_for_port $VLLM_OPENAI_PORT "vLLM OpenAI API"
     
     echo "" >> $LOG_FILE
@@ -185,6 +331,7 @@ EOF
     --max-round ${MAX_ROUND} \
     --max-tokens ${MAX_TOKENS} \
     > ${RUN_LOG_DIR}/inference.log 2>&1 &
+    echo $! > ${PID_DIR}/inference.pid
     wait_for_port $INFERENCE_PORT "Inference Server"
     
     #echo "" >> $LOG_FILE
@@ -217,6 +364,7 @@ EOF
     --host ${HOST_IP} \
     --port ${DATA_ANNOTATION_PORT} \
     > ${RUN_LOG_DIR}/case2chat.log 2>&1 &
+    echo $! > ${PID_DIR}/case2chat.pid
     wait_for_port $DATA_ANNOTATION_PORT "Case2Chat"
     
     cd -
@@ -231,6 +379,8 @@ EOF
 
     echo "HOST_IP=${HOST_IP} UI_PORT=${UI_PORT} INFERENCE_PORT=${INFERENCE_PORT} VOICE_PORT=${VOICE_PORT} npm run start" >> $LOG_FILE
     nohup env HOST_IP=${HOST_IP} UI_PORT=${UI_PORT} INFERENCE_PORT=${INFERENCE_PORT} VOICE_PORT=${VOICE_PORT} npm run start >> ${RUN_LOG_DIR}/web.log 2>&1 &
+    echo $! > ${PID_DIR}/ui.pid
+    echo $! > ${PID_DIR}/web.pid
     wait_for_port $UI_PORT "Web Server"
 
     echo "====== End ======" >> $LOG_FILE
@@ -239,7 +389,10 @@ EOF
     cd -
     elif [ "$ACTION" == "stop" ]; then
     # Clean
+    RUN_LOG_DIR=$(resolve_run_log_dir)
+    stop_recorded_pids "${RUN_LOG_DIR}"
     . ../scripts/clean.sh $VLLM_OPENAI_PORT $INFERENCE_PORT $UI_PORT $DATA_ANNOTATION_PORT
+    write_stop_status "${RUN_LOG_DIR}"
 else
     echo "Unknown action: $ACTION, only support start or stop."
 fi
