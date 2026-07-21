@@ -4,6 +4,10 @@ PORT: 8899
 LLM_URL: http://10.130.39.6:6000/v1
 LLM_MODEL: Qwen3.6-27B
 
+RESOURCE_POOL:
+  # Must match the worker setting in a resource-pool-managed deployment.
+  ENABLED: true
+
 MEMORY:
   # Available backends: memory, redis
   BACKEND: redis

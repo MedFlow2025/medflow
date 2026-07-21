@@ -3,13 +3,14 @@ import concurrent.futures
 import operator
 import os
 import re
+import secrets
 import time
 import traceback
 from typing import Any, Literal, Optional
 
 import uvicorn
 import yaml
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from langchain.chat_models import init_chat_model
 from langchain_core.runnables import RunnableConfig
 from langchain.messages import (
@@ -23,7 +24,99 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 from pydantic import BaseModel, Field
-from tools import *
+from admin_manager import (
+    admin_apply_benchmark_stop,
+    admin_apply_cleanup,
+    admin_apply_service_stop,
+    admin_apply_test_stop,
+    admin_list_benchmark_jobs,
+    admin_list_service_instances,
+    admin_list_test_runs,
+    admin_preview_benchmark_stop,
+    admin_preview_cleanup,
+    admin_preview_service_stop,
+    admin_preview_test_stop,
+)
+from tools import (
+    benchmark_inspect,
+    benchmark_jobs,
+    benchmark_list,
+    benchmark_report,
+    benchmark_run,
+    benchmark_stop,
+    config_check,
+    config_keys,
+    config_show,
+    config_update,
+    current_request_thread_id,
+    current_request_user_id,
+    gpu_recommend_allocation,
+    gpu_status,
+    model_list,
+    node_benchmark_inspect,
+    node_benchmark_jobs,
+    node_benchmark_list,
+    node_benchmark_report,
+    node_benchmark_run,
+    node_benchmark_stop,
+    node_config_check,
+    node_config_keys,
+    node_config_show,
+    node_config_update,
+    node_disable,
+    node_enable,
+    node_gpu_recommend_allocation,
+    node_gpu_status,
+    node_list,
+    node_model_list,
+    node_port_status,
+    node_recommend_start_target,
+    node_service_instance_list,
+    node_service_instance_status,
+    node_service_instance_stop,
+    node_service_instance_tasks,
+    node_service_log_context,
+    node_service_log_runs,
+    node_service_log_search,
+    node_service_log_tail,
+    node_service_restart,
+    node_service_start,
+    node_service_start_status,
+    node_service_status,
+    node_service_stop,
+    node_service_test_list,
+    node_service_test_run,
+    node_service_test_run_all,
+    node_service_test_status,
+    node_service_test_stop,
+    port_status,
+    reset_current_request_thread_id,
+    reset_current_request_resource_context,
+    reset_current_request_user_id,
+    running_benchmark_jobs_text,
+    service_instance_list,
+    service_instance_status,
+    service_instance_stop,
+    service_instance_tasks,
+    service_log_context,
+    service_log_runs,
+    service_log_search,
+    service_log_tail,
+    service_restart,
+    service_start,
+    service_start_status,
+    service_status,
+    service_stop,
+    service_test_list,
+    service_test_run,
+    service_test_run_all,
+    service_test_status,
+    service_test_stop,
+    set_current_request_thread_id,
+    set_current_request_resource_context,
+    set_current_request_user_id,
+    sync_worker_service_host_ip,
+)
 from typing_extensions import Annotated, TypedDict
 
 app = FastAPI()
@@ -63,6 +156,7 @@ class InferenceRequest(BaseModel):
     session_id: Optional[str] = None
     thread_id: Optional[str] = None
     include_trace: bool = False
+    resource_context: Optional[dict[str, Any]] = None
 
 
 class ToolInvokeRequest(BaseModel):
@@ -70,6 +164,7 @@ class ToolInvokeRequest(BaseModel):
     args: dict[str, Any] = Field(default_factory=dict)
     user_id: Optional[str] = None
     thread_id: Optional[str] = None
+    resource_context: Optional[dict[str, Any]] = None
 
 
 AGENT_CONFIG_FILE = os.path.abspath(
@@ -89,11 +184,28 @@ def load_agent_config() -> dict:
 
 AGENT_CONFIG = load_agent_config()
 AGENT_ROLE = os.getenv("AGENT_ROLE", AGENT_CONFIG.get("ROLE", "worker")).strip().lower()
+ADMIN_CONFIG = (
+    AGENT_CONFIG.get("ADMIN", {})
+    if isinstance(AGENT_CONFIG.get("ADMIN"), dict)
+    else {}
+)
+ADMIN_ENABLED = str(ADMIN_CONFIG.get("ENABLED", False)).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+ADMIN_TOKEN = os.getenv("MEDFLOW_ADMIN_TOKEN", "").strip()
 VLLM_URL = os.getenv(
     "AGENT_LLM_URL", AGENT_CONFIG.get("LLM_URL", "http://10.130.35.2:8111/v1")
 )
 LLM_MODEL = os.getenv(
     "AGENT_LLM_MODEL", AGENT_CONFIG.get("LLM_MODEL", "Qwen3.6-27B")
+)
+LLM_TIMEOUT_SECONDS = int(os.getenv("AGENT_LLM_TIMEOUT_SECONDS", "300"))
+LLM_MAX_RETRIES = int(os.getenv("AGENT_LLM_MAX_RETRIES", "1"))
+LLM_MAX_COMPLETION_TOKENS = int(
+    os.getenv("AGENT_LLM_MAX_COMPLETION_TOKENS", "4096")
 )
 INFERENCE_AGENT_HOST = os.getenv(
     "INFERENCE_AGENT_HOST", AGENT_CONFIG.get("HOST", "10.130.35.2")
@@ -103,6 +215,152 @@ INFERENCE_AGENT_PORT = int(
 )
 # AGENT_MAX_TOKENS = 8192
 
+
+def initialize_worker_node_config() -> None:
+    if AGENT_ROLE not in {"worker", "both"}:
+        return
+    try:
+        result = sync_worker_service_host_ip()
+    except Exception as exc:
+        print(
+            "[config] failed to synchronize service.yaml HOST_IP: "
+            f"{type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        return
+    if result["changed"]:
+        print(
+            "[config] service.yaml HOST_IP synchronized "
+            f"{result['configured_ip'] or 'empty'} -> {result['worker_ip']}",
+            flush=True,
+        )
+    if ADMIN_ENABLED and not ADMIN_TOKEN:
+        print(
+            "[admin] ADMIN.ENABLED=true but MEDFLOW_ADMIN_TOKEN is missing; "
+            "admin endpoints will reject requests",
+            flush=True,
+        )
+
+
+@app.on_event("startup")
+def initialize_api_worker_node_config() -> None:
+    initialize_worker_node_config()
+
+
+def require_admin_access(authorization: Optional[str]) -> None:
+    if AGENT_ROLE not in {"worker", "both"} or not ADMIN_ENABLED:
+        raise HTTPException(status_code=404, detail="Admin endpoints are disabled")
+    if not ADMIN_TOKEN:
+        raise HTTPException(status_code=503, detail="Admin token is not configured")
+    scheme, _, provided = str(authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not secrets.compare_digest(provided, ADMIN_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+
+@app.get("/admin/cleanup/preview")
+def preview_admin_cleanup(
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin_access(authorization)
+    return admin_preview_cleanup()
+
+
+@app.post("/admin/cleanup/apply")
+def apply_admin_cleanup(
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin_access(authorization)
+    return admin_apply_cleanup()
+
+
+@app.get("/admin/services")
+def run_admin_service_list(
+    limit: int = 20,
+    status: str = "",
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin_access(authorization)
+    return admin_list_service_instances(limit=limit, status=status)
+
+
+@app.get("/admin/services/{instance_id}/stop/preview")
+def preview_admin_service_stop(
+    instance_id: str,
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin_access(authorization)
+    return admin_preview_service_stop(instance_id)
+
+
+@app.post("/admin/services/{instance_id}/stop/apply")
+def apply_admin_service_stop(
+    instance_id: str,
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin_access(authorization)
+    return admin_apply_service_stop(instance_id)
+
+
+@app.get("/admin/benchmarks")
+def run_admin_benchmark_list(
+    limit: int = 20,
+    status: str = "",
+    instance_id: str = "",
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin_access(authorization)
+    return admin_list_benchmark_jobs(
+        limit=limit, status=status, instance_id=instance_id
+    )
+
+
+@app.get("/admin/benchmarks/{job_id}/stop/preview")
+def preview_admin_benchmark_stop(
+    job_id: str,
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin_access(authorization)
+    return admin_preview_benchmark_stop(job_id)
+
+
+@app.post("/admin/benchmarks/{job_id}/stop/apply")
+def apply_admin_benchmark_stop(
+    job_id: str,
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin_access(authorization)
+    return admin_apply_benchmark_stop(job_id)
+
+
+@app.get("/admin/tests")
+def run_admin_test_list(
+    limit: int = 20,
+    status: str = "",
+    instance_id: str = "",
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin_access(authorization)
+    return admin_list_test_runs(limit=limit, status=status, instance_id=instance_id)
+
+
+@app.get("/admin/tests/{test_run_id}/stop/preview")
+def preview_admin_test_stop(
+    test_run_id: str,
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin_access(authorization)
+    return admin_preview_test_stop(test_run_id)
+
+
+@app.post("/admin/tests/{test_run_id}/stop/apply")
+def apply_admin_test_stop(
+    test_run_id: str,
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin_access(authorization)
+    return admin_apply_test_stop(test_run_id)
+
+
 os.environ["OPENAI_API_KEY"] = "EMPTY"
 
 llm = init_chat_model(
@@ -110,6 +368,9 @@ llm = init_chat_model(
     model_provider="openai",
     api_key="empty",
     base_url=VLLM_URL,
+    timeout=LLM_TIMEOUT_SECONDS,
+    max_retries=LLM_MAX_RETRIES,
+    max_completion_tokens=LLM_MAX_COMPLETION_TOKENS,
 )
 # max_tokens=AGENT_MAX_TOKENS,
 
@@ -203,6 +464,7 @@ MAX_TOOL_CALLS = 20
 TOOL_RESULT_LOG_CHARS = 2000
 AGENT_TIMEOUT_SECONDS = int(os.getenv("AGENT_TIMEOUT_SECONDS", "900"))
 AGENT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+LLM_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=8)
 
 MEMORY_CONFIG = AGENT_CONFIG.get("MEMORY", {}) if isinstance(AGENT_CONFIG.get("MEMORY"), dict) else {}
 MEMORY_BACKEND = os.getenv(
@@ -273,42 +535,72 @@ def build_checkpointer():
     )
 
 
-def run_with_timeout(fn, timeout_seconds: int, timeout_message: str):
-    future = AGENT_EXECUTOR.submit(fn)
+def run_with_timeout(
+    fn,
+    timeout_seconds: int,
+    timeout_message: str,
+    executor=None,
+):
+    future = (executor or AGENT_EXECUTOR).submit(fn)
     try:
         return future.result(timeout=timeout_seconds)
     except concurrent.futures.TimeoutError as exc:
+        future.cancel()
         raise TimeoutError(timeout_message) from exc
 
 
 def empty_response_data() -> dict:
     return {
-        "config": None,
-        "services": None,
-        "benchmark": None,
+        "config_draft": None,
+        "service_instances": None,
+        "benchmark_reports": [],
         "nodes": {},
     }
+
+
+def merge_benchmark_reports(left, right) -> list[dict]:
+    """Merge current-turn benchmark reports by job_id, keeping call order."""
+    reports = []
+    indexes = {}
+    for group in (left, right):
+        if not isinstance(group, list):
+            continue
+        for report in group:
+            if not isinstance(report, dict):
+                continue
+            item = dict(report)
+            job_id = str(item.get("job_id") or "").strip()
+            if job_id and job_id in indexes:
+                reports[indexes[job_id]] = item
+                continue
+            if job_id:
+                indexes[job_id] = len(reports)
+            reports.append(item)
+    return reports
 
 
 def merge_response_data(left: Optional[dict], right: Optional[dict]) -> dict:
     data = empty_response_data()
 
     if isinstance(left, dict):
-        data["config"] = left.get("config")
-        data["services"] = left.get("services")
-        data["benchmark"] = left.get("benchmark")
+        data["config_draft"] = left.get("config_draft")
+        data["service_instances"] = left.get("service_instances")
+        data["benchmark_reports"] = merge_benchmark_reports(
+            [], left.get("benchmark_reports")
+        )
         if isinstance(left.get("nodes"), dict):
             data["nodes"] = dict(left["nodes"])
 
     if not isinstance(right, dict):
         return data
 
-    if right.get("config") is not None:
-        data["config"] = right["config"]
-    if right.get("services") is not None:
-        data["services"] = right["services"]
-    if right.get("benchmark") is not None:
-        data["benchmark"] = right["benchmark"]
+    if right.get("config_draft") is not None:
+        data["config_draft"] = right["config_draft"]
+    if right.get("service_instances") is not None:
+        data["service_instances"] = right["service_instances"]
+    data["benchmark_reports"] = merge_benchmark_reports(
+        data["benchmark_reports"], right.get("benchmark_reports")
+    )
 
     nodes = right.get("nodes")
     if isinstance(nodes, dict):
@@ -320,15 +612,34 @@ def merge_response_data(left: Optional[dict], right: Optional[dict]) -> dict:
                 merged_node = {}
             else:
                 merged_node = dict(merged_node)
-            if node_data.get("config") is not None:
-                merged_node["config"] = node_data["config"]
-            if node_data.get("services") is not None:
-                merged_node["services"] = node_data["services"]
-            if node_data.get("benchmark") is not None:
-                merged_node["benchmark"] = node_data["benchmark"]
+            if node_data.get("config_draft") is not None:
+                merged_node["config_draft"] = node_data["config_draft"]
+            if node_data.get("service_instances") is not None:
+                merged_node["service_instances"] = node_data["service_instances"]
+            merged_node["benchmark_reports"] = merge_benchmark_reports(
+                merged_node.get("benchmark_reports"),
+                node_data.get("benchmark_reports"),
+            )
+            if not merged_node["benchmark_reports"]:
+                merged_node.pop("benchmark_reports")
             data["nodes"][node] = merged_node
 
     return data
+
+
+def compact_response_data(data: Optional[dict]) -> dict:
+    """Remove internal empty placeholders from an external API response."""
+    merged = merge_response_data(empty_response_data(), data)
+    compact = {}
+    if merged.get("config_draft") is not None:
+        compact["config_draft"] = merged["config_draft"]
+    if merged.get("service_instances") is not None:
+        compact["service_instances"] = merged["service_instances"]
+    if merged.get("benchmark_reports"):
+        compact["benchmark_reports"] = merged["benchmark_reports"]
+    if merged.get("nodes"):
+        compact["nodes"] = merged["nodes"]
+    return compact
 
 
 def split_tool_observation(observation) -> tuple[str, dict]:
@@ -370,10 +681,53 @@ def pretty_print_cli_message(message: AnyMessage) -> None:
 
 
 def controller_response_data(data: Optional[dict]) -> dict:
-    merged = merge_response_data(empty_response_data(), data)
-    return {
-        "nodes": merged["nodes"],
+    compact = compact_response_data(data)
+    nodes = compact.get("nodes")
+    return {"nodes": nodes} if isinstance(nodes, dict) and nodes else {}
+
+
+def build_tool_api_response(
+    status: str,
+    result: str,
+    *,
+    tool: str,
+    data: Optional[dict] = None,
+    role: Optional[str] = None,
+) -> dict:
+    response = {
+        "status": status,
+        "tool": tool,
+        "result": result,
+        "data": compact_response_data(data),
     }
+    if role is not None:
+        response["role"] = role
+    return response
+
+
+def build_agent_api_response(
+    status: str,
+    result: str,
+    *,
+    thread_id: str,
+    data: Optional[dict] = None,
+    role: Optional[str] = None,
+    usage: Optional[dict] = None,
+    trace: Optional[list[dict]] = None,
+) -> dict:
+    response = {
+        "status": status,
+        "thread_id": thread_id,
+        "result": result,
+        "data": controller_response_data(data),
+    }
+    if role is not None:
+        response["role"] = role
+    if usage is not None:
+        response["usage"] = usage
+    if trace is not None:
+        response["trace"] = trace
+    return response
 
 
 class MessagesState(TypedDict):
@@ -397,6 +751,11 @@ def graph_request_user_id(config: RunnableConfig) -> str:
 
 def graph_thread_id(config: RunnableConfig) -> str:
     return str(config.get("configurable", {}).get("thread_id") or "").strip()
+
+
+def graph_resource_context(config: RunnableConfig) -> dict:
+    value = config.get("configurable", {}).get("resource_context")
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def reset_turn_state(state: MessagesState) -> dict:
@@ -429,8 +788,9 @@ def llm_node(state: MessagesState):
     try:
         response = run_with_timeout(
             lambda: model_with_tools.invoke(system_msg + state["messages"]),
-            AGENT_TIMEOUT_SECONDS,
-            "请求处理超时",
+            LLM_TIMEOUT_SECONDS,
+            "模型调用超时",
+            executor=LLM_EXECUTOR,
         )
     except Exception as e:
         print("[LLM_ERROR] model invocation failed")
@@ -460,9 +820,13 @@ def tool_node(
 ) -> Command[Literal["llm_node", END]]:
     user_token = set_current_request_user_id(graph_request_user_id(config))
     thread_token = set_current_request_thread_id(graph_thread_id(config))
+    resource_token = set_current_request_resource_context(
+        graph_resource_context(config)
+    )
     try:
         return _tool_node(state)
     finally:
+        reset_current_request_resource_context(resource_token)
         reset_current_request_thread_id(thread_token)
         reset_current_request_user_id(user_token)
 
@@ -550,9 +914,13 @@ def policy_node(
 ) -> Command[Literal["tool_node", END]]:
     user_token = set_current_request_user_id(graph_request_user_id(config))
     thread_token = set_current_request_thread_id(graph_thread_id(config))
+    resource_token = set_current_request_resource_context(
+        graph_resource_context(config)
+    )
     try:
         return _policy_node(state)
     finally:
+        reset_current_request_resource_context(resource_token)
         reset_current_request_thread_id(thread_token)
         reset_current_request_user_id(user_token)
 
@@ -614,12 +982,6 @@ def policy_precheck(
             return False, benchmark_msg
         return True, ""
 
-    if action in ["config_update", "config_restore"]:
-        status_text, _ = split_tool_observation(tool_map["service_status"].invoke({}))
-        if "RUNNING" in status_text:
-            return False, ("检测到服务正在运行，禁止修改配置。\n请先停止服务。")
-        return True, ""
-
     return True, ""
 
 
@@ -635,7 +997,14 @@ agent_builder.add_conditional_edges(
     route_by_tool,
     ["policy_node", END],
 )
-agent = agent_builder.compile(checkpointer=build_checkpointer())
+LANGGRAPH_MANAGED_CHECKPOINTER = os.getenv(
+    "MEDFLOW_LANGGRAPH_MANAGED_CHECKPOINTER", "0"
+).strip().lower() in {"1", "true", "yes", "on"}
+
+if LANGGRAPH_MANAGED_CHECKPOINTER:
+    agent = agent_builder.compile()
+else:
+    agent = agent_builder.compile(checkpointer=build_checkpointer())
 
 
 def normalize_thread_part(value: Optional[str], default: str = "") -> str:
@@ -741,9 +1110,11 @@ def run_service_agent(
     thread_id: str = "api",
     include_trace: bool = False,
     user_id: Optional[str] = None,
+    resource_context: Optional[dict[str, Any]] = None,
 ):
     user_token = set_current_request_user_id(user_id or thread_id)
     thread_token = set_current_request_thread_id(thread_id)
+    resource_token = set_current_request_resource_context(resource_context)
     messages = [HumanMessage(content=command)]
 
     try:
@@ -756,10 +1127,12 @@ def run_service_agent(
                 "configurable": {
                     "thread_id": thread_id,
                     "request_user_id": user_id or thread_id,
+                    "resource_context": resource_context or {},
                 }
             },
         )
     finally:
+        reset_current_request_resource_context(resource_token)
         reset_current_request_thread_id(thread_token)
         reset_current_request_user_id(user_token)
 
@@ -793,10 +1166,34 @@ def run_inference_agent_tool(req: ToolInvokeRequest):
     tool_args = req.args or {}
     user_token = set_current_request_user_id(req.user_id or "")
     thread_token = set_current_request_thread_id(req.thread_id or "")
+    resource_token = set_current_request_resource_context(req.resource_context)
     start = time.time()
     try:
-        return _run_inference_agent_tool(req, request_id, tool_name, tool_args, start)
+        try:
+            return _run_inference_agent_tool(
+                req, request_id, tool_name, tool_args, start
+            )
+        except Exception as exc:
+            duration = time.time() - start
+            print(
+                f"[worker-tool-api][{request_id}] failed role={AGENT_ROLE} "
+                f"thread_id={current_request_thread_id()} "
+                f"tool={tool_name} duration={duration:.3f}s "
+                f"error={type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            print(traceback.format_exc())
+            return build_tool_api_response(
+                "error",
+                (
+                    "工具请求处理失败。\n"
+                    f"error_type={type(exc).__name__}\n"
+                    f"error={exc}"
+                ),
+                tool=tool_name,
+            )
     finally:
+        reset_current_request_resource_context(resource_token)
         reset_current_request_thread_id(thread_token)
         reset_current_request_user_id(user_token)
 
@@ -810,29 +1207,28 @@ def _run_inference_agent_tool(
 ):
     print(
         f"\n[worker-tool-api][{request_id}] request role={AGENT_ROLE} "
-        f"thread_id={current_request_thread_id()} tool={tool_name} args={tool_args}",
+        f"thread_id={current_request_thread_id()} tool={tool_name} args={tool_args} "
+        f"resource_context={req.resource_context or {}}",
         flush=True,
     )
     if AGENT_ROLE not in {"worker", "both"}:
-        return {
-            "status": "error",
-            "role": AGENT_ROLE,
-            "tool": tool_name,
-            "result": "当前进程不是 worker/both 角色，不提供 /worker/tool 工具执行接口。",
-            "data": empty_response_data(),
-        }
+        return build_tool_api_response(
+            "error",
+            "当前进程不是 worker/both 角色，不提供 /worker/tool 工具执行接口。",
+            tool=tool_name,
+            role=AGENT_ROLE,
+        )
 
     tool = worker_tools_by_name.get(tool_name)
     if tool is None:
-        response = {
-            "status": "error",
-            "tool": tool_name,
-            "result": (
+        response = build_tool_api_response(
+            "error",
+            (
                 f"Unknown worker tool: {tool_name}. "
                 f"Available tools: {', '.join(sorted(worker_tools_by_name))}"
             ),
-            "data": empty_response_data(),
-        }
+            tool=tool_name,
+        )
         duration = time.time() - start
         print(
             f"[worker-tool-api][{request_id}] response role={AGENT_ROLE} "
@@ -847,12 +1243,9 @@ def _run_inference_agent_tool(
         tool_name, worker_tools_by_name, tool_args=tool_args
     )
     if not allowed:
-        response = {
-            "status": "blocked",
-            "tool": tool_name,
-            "result": message,
-            "data": empty_response_data(),
-        }
+        response = build_tool_api_response(
+            "blocked", message, tool=tool_name
+        )
         duration = time.time() - start
         print(
             f"[worker-tool-api][{request_id}] response role={AGENT_ROLE} "
@@ -894,12 +1287,12 @@ def _run_inference_agent_tool(
         f"result={preview_tool_result(result_text)}",
         flush=True,
     )
-    return {
-        "status": status,
-        "tool": tool_name,
-        "result": result_text,
-        "data": response_data,
-    }
+    return build_tool_api_response(
+        status,
+        result_text,
+        tool=tool_name,
+        data=response_data,
+    )
 
 
 @app.post("/inference_agent")
@@ -909,18 +1302,18 @@ def run_inference_agent(req: InferenceRequest):
     start = time.time()
     print(
         f"\n[controller-api][{request_id}] request role={AGENT_ROLE} "
-        f"thread_id={thread_id} command={req.command}",
+        f"thread_id={thread_id} resource_context={req.resource_context or {}} "
+        f"command={req.command}",
         flush=True,
     )
 
     if AGENT_ROLE == "worker":
-        return {
-            "status": "error",
-            "role": AGENT_ROLE,
-            "thread_id": thread_id,
-            "result": "当前进程是 worker 角色，只提供 /worker/tool 内部工具接口。",
-            "data": controller_response_data(empty_response_data()),
-        }
+        return build_agent_api_response(
+            "error",
+            "当前进程是 worker 角色，只提供 /worker/tool 内部工具接口。",
+            thread_id=thread_id,
+            role=AGENT_ROLE,
+        )
 
     try:
         agent_result = run_with_timeout(
@@ -929,6 +1322,7 @@ def run_inference_agent(req: InferenceRequest):
                 thread_id,
                 req.include_trace,
                 req.user_id,
+                req.resource_context,
             ),
             AGENT_TIMEOUT_SECONDS,
             "请求处理超时",
@@ -942,20 +1336,23 @@ def run_inference_agent(req: InferenceRequest):
             f"timeout={AGENT_TIMEOUT_SECONDS}s error={e}",
             flush=True,
         )
-        return {
-            "status": "timeout",
-            "thread_id": thread_id,
-            "result": result_text,
-            "data": controller_response_data(empty_response_data()),
-        }
+        return build_agent_api_response(
+            "timeout", result_text, thread_id=thread_id
+        )
     except Exception as e:
         duration = time.time() - start
         print(
             f"[controller-api][{request_id}] failed role={AGENT_ROLE} "
-            f"duration={duration:.3f}s error={e}",
+            f"thread_id={thread_id} duration={duration:.3f}s "
+            f"error={type(e).__name__}: {e}",
             flush=True,
         )
-        raise
+        print(traceback.format_exc())
+        return build_agent_api_response(
+            "error",
+            "请求处理失败，本次操作未完成，请稍后重试。",
+            thread_id=thread_id,
+        )
 
     duration = time.time() - start
     print(
@@ -965,19 +1362,18 @@ def run_inference_agent(req: InferenceRequest):
         flush=True,
     )
 
-    response = {
-        "status": "ok",
-        "thread_id": thread_id,
-        "result": agent_result["result"],
-        "data": agent_result["data"],
-    }
-    if req.include_trace:
-        response["usage"] = agent_result["usage"]
-        response["trace"] = agent_result["trace"]
-    return response
+    return build_agent_api_response(
+        "ok",
+        agent_result["result"],
+        thread_id=thread_id,
+        data=agent_result["data"],
+        usage=agent_result.get("usage") if req.include_trace else None,
+        trace=agent_result.get("trace") if req.include_trace else None,
+    )
 
 
 def main():
+    initialize_worker_node_config()
     print("\n🟢 Inference Service Agent")
     print("Type: start / stop / status / test / logs / exit\n")
 

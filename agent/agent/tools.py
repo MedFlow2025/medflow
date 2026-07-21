@@ -1,5 +1,6 @@
 import ast
 import copy
+import fcntl
 import hashlib
 import json
 import os
@@ -9,11 +10,13 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Dict, Optional
 
@@ -24,12 +27,14 @@ from langchain.tools import tool
 CONFIG_FILE = "../config/service.yaml"
 DEFAULT_CONFIG_FILE = "../config/service.default.yaml"
 NODES_CONFIG_FILE = "../config/nodes.yaml"
+AGENT_CONFIG_FILE = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "../config/agent.yaml")
+)
 WHITELIST = {
     "PORTS.VLLM_OPENAI_PORT",
     "PORTS.INFERENCE_PORT",
     "PORTS.UI_PORT",
     "PORTS.DATA_ANNOTATION_PORT",
-    "ENV.HOST_IP",
     "ENV.CUDA_VISIBLE_DEVICES",
     "ENV.MASTER_PORT",
     "ENV.MODEL_NAME",
@@ -39,21 +44,6 @@ WHITELIST = {
     "RUNTIME.GPU_MEMORY_UTILIZATION",
     "RUNTIME.GPU_UTILIZATION_THRESHOLD",
 }
-# "ENV.BENCHMARK_DIR",
-# "ENV.GENERAL_BENCHMARK_DIR",
-# "ENV.HUMANEVAL_EXECUTOR",
-# "ENV.HUMANEVAL_DOCKER_IMAGE",
-# "ENV.HUMANEVAL_TIMEOUT",
-# "ENV.HUMANEVAL_MEMORY",
-# "ENV.HUMANEVAL_CPUS",
-# "ENV.HUMANEVAL_PIDS_LIMIT",
-# "ENV.LCB_EXECUTOR",
-# "ENV.LCB_DOCKER_IMAGE",
-# "ENV.LCB_TIMEOUT",
-# "ENV.LCB_NUM_PROCESS",
-# "ENV.LCB_MEMORY",
-# "ENV.LCB_CPUS",
-# "ENV.LCB_PIDS_LIMIT",
 LOG_FILES = {
     "start": "start-service.log",
     "vllm": "vllm.log",
@@ -70,7 +60,6 @@ MAX_LIST_LIMIT = 100
 PROGRESS_UPDATE_INTERVAL = 5
 NODE_AGENT_TIMEOUT = int(os.getenv("NODE_AGENT_TIMEOUT", "300"))
 BENCHMARK_SUBMIT_LOCK_TTL = int(os.getenv("BENCHMARK_SUBMIT_LOCK_TTL", "600"))
-
 # Request-scoped identity for service instance ownership checks.
 CURRENT_REQUEST_USER_ID: ContextVar[str] = ContextVar(
     "CURRENT_REQUEST_USER_ID", default=""
@@ -78,6 +67,15 @@ CURRENT_REQUEST_USER_ID: ContextVar[str] = ContextVar(
 CURRENT_REQUEST_THREAD_ID: ContextVar[str] = ContextVar(
     "CURRENT_REQUEST_THREAD_ID", default=""
 )
+CURRENT_REQUEST_RESOURCE_CONTEXT: ContextVar[Optional[dict]] = ContextVar(
+    "CURRENT_REQUEST_RESOURCE_CONTEXT", default=None
+)
+PORT_ALLOCATION_LOCK = threading.Lock()
+PENDING_INSTANCE_PORTS: set[int] = set()
+PENDING_PORT_LEASE_TTL = 900
+PORT_LISTENER_CACHE_LOCK = threading.Lock()
+PORT_LISTENER_CACHE = {"time": 0.0, "listeners": {}, "scan_failed": False}
+PORT_LISTENER_CACHE_TTL = 0.5
 
 
 def safe_output(text, limit: int = MAX_OUTPUT_CHARS):
@@ -103,9 +101,9 @@ def parse_time_sort_value(value: object) -> float:
     text = str(value or "").strip()
     if not text:
         return 0.0
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y%m%d_%H%M%S"):
+    for fmt, length in (("%Y-%m-%d %H:%M:%S", 19), ("%Y%m%d_%H%M%S", 15)):
         try:
-            return time.mktime(time.strptime(text[: len(fmt)], fmt))
+            return time.mktime(time.strptime(text[:length], fmt))
         except Exception:
             continue
     try:
@@ -120,6 +118,7 @@ def status_sort_rank(status: object) -> int:
         "submitting": 0,
         "running": 0,
         "starting": 1,
+        "degraded": 2,
         "pending": 2,
         "failed": 3,
         "unknown_finished": 4,
@@ -153,9 +152,172 @@ def current_request_thread_id() -> str:
     return CURRENT_REQUEST_THREAD_ID.get().strip()
 
 
+def set_current_request_resource_context(resource_context: Optional[dict]):
+    value = dict(resource_context) if isinstance(resource_context, dict) else None
+    return CURRENT_REQUEST_RESOURCE_CONTEXT.set(value)
+
+
+def reset_current_request_resource_context(token) -> None:
+    CURRENT_REQUEST_RESOURCE_CONTEXT.reset(token)
+
+
+def current_request_resource_context() -> dict:
+    value = CURRENT_REQUEST_RESOURCE_CONTEXT.get()
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def parse_resource_pool_enabled(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off", ""}:
+        return False
+    raise ValueError("RESOURCE_POOL.ENABLED must be true or false")
+
+
+def load_resource_pool_enabled() -> bool:
+    configured = False
+    if os.path.exists(AGENT_CONFIG_FILE):
+        with open(AGENT_CONFIG_FILE) as f:
+            agent_config = yaml.safe_load(f) or {}
+        resource_config = agent_config.get("RESOURCE_POOL", {})
+        if isinstance(resource_config, dict):
+            configured = parse_resource_pool_enabled(
+                resource_config.get("ENABLED", False)
+            )
+    environment_value = os.getenv("MEDFLOW_RESOURCE_POOL_ENABLED")
+    if environment_value is not None:
+        return parse_resource_pool_enabled(environment_value)
+    return configured
+
+
+RESOURCE_POOL_ENABLED = load_resource_pool_enabled()
+
+
+def resource_pool_managed() -> bool:
+    return RESOURCE_POOL_ENABLED
+
+
+def _resource_gpu_ids(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        items = [str(item).strip() for item in value]
+    else:
+        items = [item.strip() for item in str(value or "").split(",")]
+    return list(dict.fromkeys(item for item in items if item))
+
+
+def resource_context_nodes(resource_context: Optional[dict] = None) -> list[dict]:
+    """Return normalized node allocations, including the legacy single-node form."""
+    context = resource_context or current_request_resource_context()
+    raw_nodes = context.get("nodes")
+    if isinstance(raw_nodes, list):
+        nodes = []
+        for item in raw_nodes:
+            if not isinstance(item, dict):
+                continue
+            node_id = str(item.get("runtime_node_id") or "").strip()
+            if not node_id:
+                continue
+            node = dict(item)
+            node["runtime_node_id"] = node_id
+            node["assigned_gpus"] = _resource_gpu_ids(
+                item.get("assigned_gpus", item.get("cuda_visible_devices"))
+            )
+            nodes.append(node)
+        if nodes:
+            return nodes
+
+    node_id = str(context.get("runtime_node_id") or "").strip()
+    if not node_id:
+        return []
+    return [
+        {
+            "runtime_node_id": node_id,
+            "assigned_gpus": _resource_gpu_ids(
+                context.get("assigned_gpus", context.get("cuda_visible_devices"))
+            ),
+            "tensor_parallel_size": context.get("tensor_parallel_size"),
+            "gpus_per_node": context.get("gpus_per_node"),
+            "is_master": True,
+        }
+    ]
+
+
+def resource_context_gpu_ids(resource_context: Optional[dict] = None) -> list[str]:
+    context = resource_context or current_request_resource_context()
+    direct = _resource_gpu_ids(
+        context.get("assigned_gpus", context.get("cuda_visible_devices"))
+    )
+    if direct:
+        return direct
+    nodes = resource_context_nodes(context)
+    return list(nodes[0].get("assigned_gpus") or []) if len(nodes) == 1 else []
+
+
+def managed_resource_error(
+    require_gpus: bool = False, require_reservation: bool = False
+) -> str:
+    if not resource_pool_managed():
+        return ""
+    context = current_request_resource_context()
+    nodes = resource_context_nodes(context)
+    missing = []
+    if not nodes:
+        missing.append("nodes/runtime_node_id")
+    if require_reservation and not str(context.get("reservation_id") or "").strip():
+        missing.append("reservation_id")
+    if require_gpus and (
+        not nodes or any(not node.get("assigned_gpus") for node in nodes)
+    ):
+        missing.append("assigned_gpus")
+    if not missing:
+        return ""
+    return (
+        "资源池托管模式缺少必要的资源上下文，已拒绝执行。\n"
+        f"missing={','.join(missing)}"
+    )
+
+
 def load_template_config() -> dict:
     with open(CONFIG_FILE) as f:
         return yaml.safe_load(f) or {}
+
+
+def apply_node_managed_config(cfg: dict) -> dict:
+    """Overlay worker-owned values from this worker's service.yaml."""
+    effective = copy.deepcopy(cfg)
+    template = load_template_config()
+    template_env = template.get("ENV") or {}
+    effective.setdefault("ENV", {})["HOST_IP"] = str(
+        template_env.get("HOST_IP") or ""
+    ).strip()
+    return effective
+
+
+def write_user_draft_config(path: str, cfg: dict) -> None:
+    write_runtime_config(path, apply_node_managed_config(cfg))
+
+
+def sync_worker_service_host_ip() -> dict:
+    """Persist this worker's detected IP in its node-local service.yaml."""
+    cfg = load_template_config()
+    env = cfg.setdefault("ENV", {})
+    configured_ip = str(env.get("HOST_IP") or "").strip()
+    worker_ip = get_local_ip()
+    changed = configured_ip != worker_ip
+    if changed:
+        env["HOST_IP"] = worker_ip
+        write_runtime_config(CONFIG_FILE, cfg)
+    return {
+        "changed": changed,
+        "configured_ip": configured_ip,
+        "worker_ip": worker_ip,
+        "config_file": CONFIG_FILE,
+    }
 
 
 def service_log_root_from_config(cfg: dict) -> str:
@@ -203,11 +365,97 @@ def node_identity_matches(node_cfg: dict, key: str) -> bool:
     return (
         str(node_cfg.get("NAME", "")).strip() == key
         or str(node_cfg.get("HOST", "")).strip() == key
+        or str(node_cfg.get("RESOURCE_NODE_ID", "")).strip() == key
     )
+
+
+def managed_resource_node_ids() -> set[str]:
+    if not resource_pool_managed():
+        return set()
+    return {
+        str(node.get("runtime_node_id") or "").strip()
+        for node in resource_context_nodes()
+        if str(node.get("runtime_node_id") or "").strip()
+    }
+
+
+def managed_resource_node_id() -> str:
+    return next(iter(managed_resource_node_ids()), "")
+
+
+def node_matches_resource(node_key: str, node_cfg: dict) -> bool:
+    resource_node_ids = managed_resource_node_ids()
+    if not resource_node_ids:
+        return not resource_pool_managed()
+    identities = {
+        str(node_key).strip(),
+        str(node_cfg.get("RESOURCE_NODE_ID") or "").strip(),
+        str(node_cfg.get("NAME") or "").strip(),
+        str(node_cfg.get("HOST") or "").strip(),
+    }
+    return bool(resource_node_ids.intersection(identities))
+
+
+def resource_context_for_node(
+    node_key: str,
+    node_cfg: dict,
+    resource_context: Optional[dict] = None,
+) -> dict:
+    """Narrow a managed multi-node context to one worker allocation."""
+    context = resource_context or current_request_resource_context()
+    if not resource_pool_managed() or not context:
+        return dict(context)
+    identities = {
+        str(node_key).strip(),
+        str(node_cfg.get("RESOURCE_NODE_ID") or "").strip(),
+        str(node_cfg.get("NAME") or "").strip(),
+        str(node_cfg.get("HOST") or "").strip(),
+    }
+    matched = next(
+        (
+            node
+            for node in resource_context_nodes(context)
+            if str(node.get("runtime_node_id") or "").strip() in identities
+        ),
+        None,
+    )
+    if not matched:
+        return {}
+    narrowed = {
+        key: value
+        for key, value in context.items()
+        if key
+        not in {
+            "nodes",
+            "runtime_node_id",
+            "assigned_gpus",
+            "cuda_visible_devices",
+            "tensor_parallel_size",
+            "gpus_per_node",
+        }
+    }
+    narrowed.update(matched)
+    narrowed["assigned_gpus"] = ",".join(matched.get("assigned_gpus") or [])
+    return narrowed
+
+
+def resource_allowed_nodes() -> dict:
+    nodes = enabled_nodes()
+    if not resource_pool_managed():
+        return nodes
+    return {
+        key: value
+        for key, value in nodes.items()
+        if node_matches_resource(key, value)
+    }
 
 
 def resolve_node_config(node: str, require_enabled: bool = True) -> tuple[str, dict]:
     key = str(node or "").strip()
+    if not key and resource_pool_managed():
+        matches = list(resource_allowed_nodes().items())
+        if len(matches) == 1:
+            key = matches[0][0]
     if not key:
         raise ValueError("node is required")
 
@@ -235,6 +483,12 @@ def resolve_node_config(node: str, require_enabled: bool = True) -> tuple[str, d
         raise ValueError(f"Node disabled: {node_key}")
     if not node_cfg.get("TOOL_URL") and not node_cfg.get("URL"):
         raise ValueError(f"Node URL missing: {node_key}")
+    if resource_pool_managed() and not node_matches_resource(node_key, node_cfg):
+        runtime_node_ids = ",".join(sorted(managed_resource_node_ids())) or "missing"
+        raise ValueError(
+            f"Node outside resource boundary: node={node_key}, "
+            f"runtime_node_ids={runtime_node_ids}"
+        )
     return node_key, node_cfg
 
 
@@ -250,6 +504,8 @@ def save_nodes_config(nodes: dict) -> None:
 
 
 def set_node_enabled(node: str, enabled: bool) -> str:
+    if resource_pool_managed():
+        return "资源池托管模式下禁止通过 Agent 修改全局节点启停状态。"
     nodes = load_nodes_config()
     if not nodes:
         return f"暂无节点配置: {NODES_CONFIG_FILE}"
@@ -293,6 +549,17 @@ def call_node_tool(
     thread_id = current_request_thread_id()
     if thread_id:
         payload["thread_id"] = thread_id
+    resource_context = current_request_resource_context()
+    if resource_context:
+        if resource_pool_managed():
+            resource_context = resource_context_for_node(
+                node_key, node_cfg, resource_context
+            )
+            if not resource_context:
+                raise RuntimeError(
+                    f"Node outside resource boundary: node={node_key}"
+                )
+        payload["resource_context"] = resource_context
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         tool_url,
@@ -350,12 +617,12 @@ def build_node_tool_response(node: str, response: dict) -> dict:
 
     node_key = response.get("_node_key", node) if isinstance(response, dict) else node
     node_data = {}
-    if payload.get("config") is not None:
-        node_data["config"] = payload["config"]
-    if payload.get("services") is not None:
-        node_data["services"] = payload["services"]
-    if payload.get("benchmark") is not None:
-        node_data["benchmark"] = payload["benchmark"]
+    if payload.get("config_draft") is not None:
+        node_data["config_draft"] = payload["config_draft"]
+    if payload.get("service_instances") is not None:
+        node_data["service_instances"] = payload["service_instances"]
+    if payload.get("benchmark_reports"):
+        node_data["benchmark_reports"] = payload["benchmark_reports"]
 
     response_data = {"nodes": {}}
     if node_data:
@@ -449,6 +716,19 @@ def load_json_file(path: str, default=None):
     except Exception:
         return default
     return data if data is not None else default
+
+
+@contextmanager
+def json_file_lock(path: str):
+    """Serialize read-modify-write operations for one JSON state file."""
+    lock_path = path + ".lock"
+    os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
+    with open(lock_path, "a", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def iter_json_records(root: str, filename: str):
@@ -854,11 +1134,16 @@ def ensure_user_draft_config() -> str:
 
     draft_path = get_user_draft_config_path(user_id)
     if os.path.exists(draft_path):
+        with open(draft_path, encoding="utf-8") as f:
+            existing = yaml.safe_load(f) or {}
+        synchronized = apply_node_managed_config(existing)
+        if synchronized != existing:
+            write_runtime_config(draft_path, synchronized)
         return draft_path
 
     os.makedirs(os.path.dirname(draft_path), exist_ok=True)
     cfg = load_template_config()
-    write_runtime_config(draft_path, cfg)
+    write_user_draft_config(draft_path, cfg)
     atomic_write_json(
         get_user_config_meta_path(user_id),
         {
@@ -874,9 +1159,10 @@ def ensure_user_draft_config() -> str:
 
 
 def show_config() -> dict:
-    """Show current user's draft service config, initialized from service.yaml."""
+    """Show effective config: user draft plus worker-owned node values."""
     with open(ensure_user_draft_config()) as f:
-        return yaml.safe_load(f) or {}
+        cfg = yaml.safe_load(f) or {}
+    return apply_node_managed_config(cfg)
 
 
 def show_public_config() -> dict:
@@ -923,9 +1209,224 @@ DEFAULT_PORT_POOLS = {
     "VLLM_OPENAI_PORT": (7111, 7199),
     "INFERENCE_PORT": (7013, 7099),
     "UI_PORT": (7860, 7899),
-    "DATA_ANNOTATION_PORT": (7016, 7099),
+    "DATA_ANNOTATION_PORT": (7216, 7299),
     "MASTER_PORT": (50121, 50200),
 }
+
+SERVICE_INSTANCE_PORT_NAMES = (
+    "vllm",
+    "inference",
+    "ui",
+    "case2chat",
+    "master",
+)
+
+
+def process_service_run_id(pid: int) -> str:
+    """Return SERVICE_RUN_ID for a live process, or empty when unavailable."""
+    try:
+        return str(psutil.Process(int(pid)).environ().get("SERVICE_RUN_ID") or "").strip()
+    except (psutil.Error, OSError, TypeError, ValueError):
+        return ""
+
+
+def invalidate_port_listener_cache() -> None:
+    with PORT_LISTENER_CACHE_LOCK:
+        PORT_LISTENER_CACHE["time"] = 0.0
+        PORT_LISTENER_CACHE["listeners"] = {}
+        PORT_LISTENER_CACHE["scan_failed"] = False
+
+
+def cached_tcp_listeners() -> tuple[dict[int, set[int]], bool]:
+    """Return a short-lived snapshot of local TCP listener PIDs."""
+    now = time.monotonic()
+    with PORT_LISTENER_CACHE_LOCK:
+        if now - float(PORT_LISTENER_CACHE["time"]) <= PORT_LISTENER_CACHE_TTL:
+            return (
+                {
+                    port: set(pids)
+                    for port, pids in PORT_LISTENER_CACHE["listeners"].items()
+                },
+                bool(PORT_LISTENER_CACHE["scan_failed"]),
+            )
+
+        listeners = {}
+        scan_failed = False
+        try:
+            connections = psutil.net_connections(kind="tcp")
+        except (psutil.Error, OSError):
+            connections = []
+            scan_failed = True
+        for connection in connections:
+            if connection.status != psutil.CONN_LISTEN or not connection.laddr:
+                continue
+            port = int(connection.laddr.port)
+            listeners.setdefault(port, set())
+            if connection.pid:
+                listeners[port].add(int(connection.pid))
+
+        PORT_LISTENER_CACHE["time"] = now
+        PORT_LISTENER_CACHE["listeners"] = listeners
+        PORT_LISTENER_CACHE["scan_failed"] = scan_failed
+        return (
+            {port: set(pids) for port, pids in listeners.items()},
+            scan_failed,
+        )
+
+
+def listening_port_pids(ports: set[int]) -> tuple[dict[int, set[int]], set[int]]:
+    """Return listener PIDs and ports whose listener ownership is unavailable."""
+    requested = set()
+    for value in ports:
+        try:
+            port = int(value)
+        except (TypeError, ValueError):
+            continue
+        if port > 0:
+            requested.add(port)
+    if not requested:
+        return {}, set()
+    snapshot, scan_failed = cached_tcp_listeners()
+    listeners = {port: set(snapshot.get(port) or set()) for port in requested}
+    unresolved = set()
+    for port in requested:
+        if port in snapshot and not listeners[port]:
+            unresolved.add(port)
+        elif scan_failed and check_port(port):
+            unresolved.add(port)
+        elif not listeners[port] and check_port(port):
+            unresolved.add(port)
+    return listeners, unresolved
+
+
+def service_instance_port_ownership(
+    meta: dict,
+    listener_snapshot: Optional[tuple[dict[int, set[int]], set[int]]] = None,
+) -> dict[str, list[dict]]:
+    """Classify recorded ports as owned, reused, unverified, or closed."""
+    instance_id = str(meta.get("instance_id") or meta.get("run_id") or "").strip()
+    configured_ports = {}
+    for name, value in (meta.get("ports") or {}).items():
+        if name not in SERVICE_INSTANCE_PORT_NAMES:
+            continue
+        try:
+            port = int(value)
+        except (TypeError, ValueError):
+            continue
+        if port > 0:
+            configured_ports[str(name)] = port
+
+    if listener_snapshot is None:
+        listeners, unresolved_ports = listening_port_pids(
+            set(configured_ports.values())
+        )
+    else:
+        listeners, unresolved_ports = listener_snapshot
+    result = {"owned": [], "reused": [], "unverified": [], "closed": []}
+    for name, port in configured_ports.items():
+        pids = sorted(listeners.get(port) or [])
+        entry = {"name": name, "port": port, "pids": pids}
+        if not pids:
+            category = "unverified" if port in unresolved_ports else "closed"
+        else:
+            run_ids = {pid: process_service_run_id(pid) for pid in pids}
+            entry["run_ids"] = run_ids
+            if any(run_id == instance_id for run_id in run_ids.values()):
+                category = "owned"
+            elif any(not run_id for run_id in run_ids.values()):
+                category = "unverified"
+            else:
+                category = "reused"
+        result[category].append(entry)
+    return result
+
+
+def service_instance_process_ownership(
+    meta: dict,
+    port_ownership: Optional[dict[str, list[dict]]] = None,
+    tracked_pids: Optional[list[int]] = None,
+) -> dict[str, list[int]]:
+    """Classify live recorded and port-listener PIDs by SERVICE_RUN_ID."""
+    instance_id = str(meta.get("instance_id") or meta.get("run_id") or "").strip()
+    candidates = set(service_instance_recorded_pids(meta))
+    script_pid = int(meta.get("script_pid") or 0)
+    if script_pid:
+        candidates.add(script_pid)
+    for value in tracked_pids or []:
+        try:
+            pid = int(value)
+        except (TypeError, ValueError):
+            continue
+        if pid > 0:
+            candidates.add(pid)
+
+    port_ownership = port_ownership or service_instance_port_ownership(meta)
+    port_categories = {}
+    for category in ("owned", "reused", "unverified"):
+        for entry in port_ownership[category]:
+            for pid in entry.get("pids") or []:
+                candidates.add(int(pid))
+                port_categories[int(pid)] = category
+
+    result = {"owned": [], "reused": [], "unverified": []}
+    for pid in sorted(candidates):
+        if not pid_is_alive(pid):
+            continue
+        run_id = process_service_run_id(pid)
+        if run_id == instance_id:
+            category = "owned"
+        elif run_id:
+            category = "reused"
+        else:
+            category = port_categories.get(pid, "unverified")
+        result[category].append(pid)
+    return result
+
+
+def terminate_instance_owned_processes(meta: dict, timeout: float = 3.0) -> dict:
+    """Terminate only processes whose SERVICE_RUN_ID matches the instance."""
+    ownership = service_instance_process_ownership(meta)
+    root_processes = []
+    for pid in ownership["owned"]:
+        try:
+            root_processes.append(psutil.Process(pid))
+        except (psutil.Error, OSError):
+            continue
+
+    processes = {}
+    for process in root_processes:
+        try:
+            for child in process.children(recursive=True):
+                processes[child.pid] = child
+        except (psutil.Error, OSError):
+            pass
+        processes[process.pid] = process
+
+    errors = []
+    for process in processes.values():
+        try:
+            process.terminate()
+        except psutil.NoSuchProcess:
+            continue
+        except (psutil.Error, OSError) as exc:
+            errors.append({"pid": process.pid, "error": str(exc)})
+
+    _, alive = psutil.wait_procs(list(processes.values()), timeout=timeout)
+    killed = []
+    for process in alive:
+        try:
+            process.kill()
+            killed.append(process.pid)
+        except psutil.NoSuchProcess:
+            continue
+        except (psutil.Error, OSError) as exc:
+            errors.append({"pid": process.pid, "error": str(exc)})
+    invalidate_port_listener_cache()
+    return {
+        "matched_pids": sorted(processes),
+        "force_killed_pids": sorted(killed),
+        "errors": errors,
+    }
 
 
 def configured_port_pool(cfg: dict, key: str) -> tuple[int, int]:
@@ -949,14 +1450,43 @@ def configured_port_pool(cfg: dict, key: str) -> tuple[int, int]:
     return default_start, default_end
 
 
+def service_instance_holds_port_lease(
+    meta: dict,
+    listener_snapshot: Optional[tuple[dict[int, set[int]], set[int]]] = None,
+) -> bool:
+    """Return whether an instance must keep its recorded ports reserved."""
+    status = str(meta.get("status") or "").strip().lower()
+    if status in {"allocating", "starting", "running", "degraded"}:
+        return True
+    if status not in {"stopped", "failed"}:
+        return True
+
+    port_ownership = service_instance_port_ownership(meta, listener_snapshot)
+    process_ownership = service_instance_process_ownership(meta, port_ownership)
+    if process_ownership["owned"] or process_ownership["unverified"]:
+        return True
+    return bool(port_ownership["owned"] or port_ownership["unverified"])
+
+
 def used_instance_ports() -> set[int]:
     ports = set()
-    for instance_id in list_service_instance_ids():
-        meta = load_service_instance(instance_id)
-        if str(meta.get("status") or "").lower() not in {"starting", "running"}:
-            continue
-        meta = visible_service_instance_meta(instance_id)
-        if str(meta.get("status") or "").lower() not in {"starting", "running"}:
+    instances = [
+        load_service_instance(instance_id)
+        for instance_id in list_service_instance_ids()
+    ]
+    configured_ports = set()
+    for meta in instances:
+        for value in (meta.get("ports") or {}).values():
+            try:
+                configured_ports.add(int(value))
+            except (TypeError, ValueError):
+                continue
+    listener_snapshot = listening_port_pids(configured_ports)
+
+    for meta in instances:
+        if not meta or not service_instance_holds_port_lease(
+            meta, listener_snapshot
+        ):
             continue
         meta_ports = meta.get("ports") or {}
         if not isinstance(meta_ports, dict):
@@ -981,15 +1511,97 @@ def allocate_free_port(cfg: dict, key: str, reserved: set[int]) -> int:
     raise RuntimeError(f"No free port for {key} in range {start}-{end}")
 
 
-def allocate_instance_ports(cfg: dict) -> dict:
-    reserved = used_instance_ports()
-    return {
-        "vllm": allocate_free_port(cfg, "VLLM_OPENAI_PORT", reserved),
-        "inference": allocate_free_port(cfg, "INFERENCE_PORT", reserved),
-        "ui": allocate_free_port(cfg, "UI_PORT", reserved),
-        "case2chat": allocate_free_port(cfg, "DATA_ANNOTATION_PORT", reserved),
-        "master": allocate_free_port(cfg, "MASTER_PORT", reserved),
-    }
+def pending_port_lease_dir() -> str:
+    return os.path.join(get_service_log_root(), "port-leases")
+
+
+def pending_port_lease_path(instance_id: str) -> str:
+    return os.path.join(pending_port_lease_dir(), f"{instance_id}.json")
+
+
+def load_pending_instance_ports() -> set[int]:
+    lease_dir = pending_port_lease_dir()
+    if not os.path.isdir(lease_dir):
+        return set()
+    now = time.time()
+    ports = set()
+    for name in os.listdir(lease_dir):
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(lease_dir, name)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lease = json.load(f) or {}
+            created_at = float(lease.get("created_at") or 0)
+            instance_id = str(lease.get("instance_id") or "")
+            if instance_id and load_service_instance(instance_id):
+                os.unlink(path)
+                continue
+            if (
+                created_at
+                and now - created_at > PENDING_PORT_LEASE_TTL
+            ):
+                os.unlink(path)
+                continue
+            for value in (lease.get("ports") or {}).values():
+                ports.add(int(value))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+    return ports
+
+
+def allocate_instance_ports(cfg: dict, instance_id: str) -> dict:
+    instance_id = str(instance_id or "").strip()
+    if not instance_id:
+        raise ValueError("instance_id is required for port allocation")
+    lease_dir = pending_port_lease_dir()
+    os.makedirs(lease_dir, exist_ok=True)
+    lock_path = os.path.join(lease_dir, ".allocation.lock")
+    with PORT_ALLOCATION_LOCK:
+        with open(lock_path, "a", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            reserved = (
+                used_instance_ports()
+                | load_pending_instance_ports()
+                | PENDING_INSTANCE_PORTS
+            )
+            allocated = {
+                "vllm": allocate_free_port(cfg, "VLLM_OPENAI_PORT", reserved),
+                "inference": allocate_free_port(cfg, "INFERENCE_PORT", reserved),
+                "ui": allocate_free_port(cfg, "UI_PORT", reserved),
+                "case2chat": allocate_free_port(
+                    cfg, "DATA_ANNOTATION_PORT", reserved
+                ),
+                "master": allocate_free_port(cfg, "MASTER_PORT", reserved),
+            }
+            atomic_write_json(
+                pending_port_lease_path(instance_id),
+                {
+                    "instance_id": instance_id,
+                    "created_at": time.time(),
+                    "ports": allocated,
+                },
+            )
+            PENDING_INSTANCE_PORTS.update(allocated.values())
+            return allocated
+
+
+def release_pending_instance_ports(instance_id: str, ports: dict) -> None:
+    lease_dir = pending_port_lease_dir()
+    os.makedirs(lease_dir, exist_ok=True)
+    lock_path = os.path.join(lease_dir, ".allocation.lock")
+    with PORT_ALLOCATION_LOCK:
+        with open(lock_path, "a", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                os.unlink(pending_port_lease_path(instance_id))
+            except FileNotFoundError:
+                pass
+            for port in ports.values():
+                try:
+                    PENDING_INSTANCE_PORTS.discard(int(port))
+                except (TypeError, ValueError):
+                    continue
 
 
 def service_status_data() -> dict:
@@ -1041,13 +1653,71 @@ def service_status_data() -> dict:
     active_instances = [
         item
         for item in all_instances
-        if item["status"] in {"running", "starting"}
+        if item["status"] in {"running", "starting", "degraded"}
     ]
     self_active = [item for item in active_instances if item["owner"] == "self"]
     other_active = [item for item in active_instances if item["owner"] != "self"]
     recent_inactive = [
-        item for item in all_instances if item["status"] not in {"running", "starting"}
+        item
+        for item in all_instances
+        if item["status"] not in {"running", "starting", "degraded"}
     ][:3]
+
+    self_instances = [item for item in all_instances if item["owner"] == "self"]
+    status_counts = {
+        "starting": 0,
+        "running": 0,
+        "degraded": 0,
+        "failed": 0,
+        "stopped": 0,
+    }
+    for item in self_instances:
+        status = item["status"] or "unknown"
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    always_returned = [
+        copy.deepcopy(item)
+        for item in self_instances
+        if item["status"] in {"starting", "running", "degraded"}
+    ]
+    recent_failed = [
+        copy.deepcopy(item)
+        for item in self_instances
+        if item["status"] == "failed"
+    ][:5]
+    recent_stopped = [
+        copy.deepcopy(item)
+        for item in self_instances
+        if item["status"] == "stopped"
+    ][:5]
+    structured_items = always_returned + recent_failed + recent_stopped
+    structured_items.sort(
+        key=lambda item: (
+            status_sort_rank(item["status"]),
+            -parse_time_sort_value(item["started_at"]),
+            item["instance_id"],
+        )
+    )
+    for item in structured_items:
+        item.pop("owner", None)
+        item["gpus"] = [
+            int(gpu) if str(gpu).isdigit() else str(gpu)
+            for gpu in parse_visible_gpus(item.get("gpus", ""))
+        ]
+
+    service_instances = {
+        "operation": "status",
+        "summary": {
+            "total": len(self_instances),
+            **status_counts,
+        },
+        "returned": len(structured_items),
+        "items": structured_items,
+        "limits": {
+            "failed": 5,
+            "stopped": 5,
+        },
+    }
 
     lines = [
         "\n======== 推理服务状态 ========",
@@ -1118,8 +1788,7 @@ def service_status_data() -> dict:
 
     lines.append("============================\n")
     return {
-        "services": template_services,
-        "template_services": template_services,
+        "service_instances": service_instances,
         "instances": {
             "active": active_instances,
             "self_active": self_active,
@@ -1148,6 +1817,12 @@ def check_gpu_status() -> str:
     """Show GPU usage status (memory, utilization, process)."""
 
     bus_id_to_idx = {}
+    resource_error = managed_resource_error(require_gpus=True)
+    if resource_error:
+        return resource_error
+    allowed_gpus = (
+        set(resource_context_gpu_ids()) if resource_pool_managed() else None
+    )
 
     cmd = (
         "nvidia-smi --query-gpu=index,name,gpu_bus_id,memory.used,memory.total,utilization.gpu "
@@ -1169,6 +1844,8 @@ def check_gpu_status() -> str:
             result.append(f"Skip unparsable GPU line: {line}")
             continue
         idx, name, gpu_bus_id, used, total, util = parts
+        if allowed_gpus is not None and idx not in allowed_gpus:
+            continue
 
         bus_id_to_idx[gpu_bus_id] = idx
         result.append(
@@ -1200,6 +1877,8 @@ def check_gpu_status() -> str:
             result.append(f"Skip unparsable process line: {line}")
             continue
         gpu_bus_id, pid, name, used = parts
+        if gpu_bus_id not in bus_id_to_idx:
+            continue
         result.append(
             f"GPU: {bus_id_to_idx.get(gpu_bus_id, 'Unknown')} | PID: {pid} {name} | GPU Memory Usage: {used} MiB"
         )
@@ -1738,7 +2417,9 @@ def evaluate_gpu_selection(
 
 
 def recommend_gpu_for_config(
-    cfg: Optional[dict] = None, reserve_instances: bool = True
+    cfg: Optional[dict] = None,
+    reserve_instances: bool = True,
+    allowed_gpus: Optional[list[str]] = None,
 ) -> dict:
     """
     Intelligently evaluate and recommend GPU resources.
@@ -1776,12 +2457,36 @@ def recommend_gpu_for_config(
     gpu_utilization, utilization_error = get_gpu_utilization_map()
     if utilization_error:
         return {"ok": False, "analysis": utilization_error}
+
+    if allowed_gpus is None and resource_pool_managed():
+        allowed_gpus = resource_context_gpu_ids()
+    if allowed_gpus is not None:
+        allowed = set(str(item) for item in allowed_gpus)
+        gpu_memory = {
+            gpu_id: value for gpu_id, value in gpu_memory.items() if gpu_id in allowed
+        }
+        gpu_utilization = {
+            gpu_id: value
+            for gpu_id, value in gpu_utilization.items()
+            if gpu_id in allowed
+        }
+        if not allowed:
+            return {
+                "ok": False,
+                "current_ok": False,
+                "reason": "resource_context_missing_gpus",
+                "analysis": "资源池未提供可用 GPU 边界，无法进行自动分配。",
+            }
     if reserve_instances:
         gpu_memory, reserved_gpus = reserve_instance_gpu_memory(gpu_memory)
     else:
         reserved_gpus = []
 
     analysis_lines = describe_model_profile(profile)
+    if allowed_gpus is not None:
+        analysis_lines.append(
+            f"资源池 GPU 边界: assigned_gpus={','.join(allowed_gpus)}"
+        )
     if reserved_gpus:
         analysis_lines.append(
             f"实例预占用: GPU {','.join(reserved_gpus)} 已被 starting/running 实例占用。"
@@ -1957,6 +2662,14 @@ def recommend_gpu_for_config(
 
 def recommend_gpu() -> dict:
     """Recommend GPU allocation for the current user's draft config."""
+    resource_error = managed_resource_error(require_gpus=True)
+    if resource_error:
+        return {
+            "ok": False,
+            "current_ok": False,
+            "reason": "resource_context_missing",
+            "analysis": resource_error,
+        }
     return recommend_gpu_for_config(show_config())
 
 
@@ -1993,8 +2706,21 @@ def check_service_start_static_config(cfg: dict) -> dict:
     return {"ok": True, "analysis": "启动静态配置检查通过。"}
 
 
+def apply_runtime_host_ip(runtime_cfg: dict) -> tuple[str, str]:
+    """Inject this worker's IP into an instance config without changing its draft."""
+    env = runtime_cfg.setdefault("ENV", {})
+    configured_ip = str(env.get("HOST_IP") or "").strip()
+    worker_ip = get_local_ip()
+    env["HOST_IP"] = worker_ip
+    return configured_ip, worker_ip
+
+
 def apply_auto_gpu_allocation(runtime_cfg: dict) -> tuple[bool, str, dict]:
-    recommendation = recommend_gpu_for_config(runtime_cfg, reserve_instances=True)
+    recommendation = recommend_gpu_for_config(
+        runtime_cfg,
+        reserve_instances=True,
+        allowed_gpus=(resource_context_gpu_ids() if resource_pool_managed() else None),
+    )
     if not recommendation.get("ok"):
         return (
             False,
@@ -2015,9 +2741,98 @@ def apply_auto_gpu_allocation(runtime_cfg: dict) -> tuple[bool, str, dict]:
     runtime_cfg.setdefault("ENV", {})["CUDA_VISIBLE_DEVICES"] = gpus
     runtime_cfg.setdefault("RUNTIME", {})["TENSOR_PARALLEL_SIZE"] = tp
     allocation = {
+        "mode": "auto",
         "recommended_gpus": gpus,
         "recommended_tp": tp,
         "current_ok": bool(recommendation.get("current_ok")),
+        "analysis": str(recommendation.get("analysis") or ""),
+    }
+    return True, "", allocation
+
+
+def apply_requested_gpu_allocation(
+    runtime_cfg: dict,
+    gpu_ids: str = "",
+    tensor_parallel_size: int = 0,
+    fallback_to_auto: bool = False,
+) -> tuple[bool, str, dict]:
+    requested_text = str(gpu_ids or "").strip()
+    try:
+        requested_tp = int(tensor_parallel_size or 0)
+    except (TypeError, ValueError):
+        return False, "TENSOR_PARALLEL_SIZE 必须是非负整数。", {}
+
+    if not requested_text:
+        if requested_tp:
+            return False, "指定 tensor_parallel_size 时必须同时指定 gpu_ids。", {}
+        return apply_auto_gpu_allocation(runtime_cfg)
+
+    try:
+        requested_gpus = parse_visible_gpus(requested_text)
+    except (SyntaxError, ValueError) as exc:
+        return False, f"gpu_ids 格式错误: {exc}", {}
+    if not requested_gpus:
+        return False, "gpu_ids 不能为空。", {}
+    if any(not gpu_id.isdigit() for gpu_id in requested_gpus):
+        return False, "gpu_ids 必须是逗号分隔的非负整数，例如 4,5。", {}
+    if len(set(requested_gpus)) != len(requested_gpus):
+        return False, "gpu_ids 不能包含重复 GPU。", {}
+
+    requested_tp = requested_tp or len(requested_gpus)
+    if requested_tp != len(requested_gpus):
+        return (
+            False,
+            f"TP={requested_tp} 与指定 GPU 数量={len(requested_gpus)} 不一致。",
+            {},
+        )
+
+    allowed_gpus = None
+    if resource_pool_managed():
+        allowed_gpus = resource_context_gpu_ids()
+        outside = [gpu_id for gpu_id in requested_gpus if gpu_id not in allowed_gpus]
+        if outside:
+            return (
+                False,
+                "指定 GPU 超出资源池边界。\n"
+                f"assigned_gpus={','.join(allowed_gpus)}\n"
+                f"outside_gpus={','.join(outside)}",
+                {},
+            )
+
+    requested_cfg = copy.deepcopy(runtime_cfg)
+    requested_cfg.setdefault("ENV", {})["CUDA_VISIBLE_DEVICES"] = ",".join(
+        requested_gpus
+    )
+    requested_cfg.setdefault("RUNTIME", {})[
+        "TENSOR_PARALLEL_SIZE"
+    ] = requested_tp
+    recommendation = recommend_gpu_for_config(
+        requested_cfg,
+        reserve_instances=True,
+        allowed_gpus=allowed_gpus,
+    )
+    if not recommendation.get("current_ok"):
+        if fallback_to_auto:
+            return apply_auto_gpu_allocation(runtime_cfg)
+        return (
+            False,
+            "指定 GPU 当前不可用于启动，未自动更换 GPU。\n"
+            + str(recommendation.get("analysis") or ""),
+            {},
+        )
+
+    runtime_cfg.setdefault("ENV", {})["CUDA_VISIBLE_DEVICES"] = ",".join(
+        requested_gpus
+    )
+    runtime_cfg.setdefault("RUNTIME", {})["TENSOR_PARALLEL_SIZE"] = requested_tp
+    allocation = {
+        "mode": "manual",
+        "requested_gpus": ",".join(requested_gpus),
+        "requested_tp": requested_tp,
+        "recommended_gpus": ",".join(requested_gpus),
+        "recommended_tp": requested_tp,
+        "current_ok": True,
+        "fallback_to_auto": bool(fallback_to_auto),
         "analysis": str(recommendation.get("analysis") or ""),
     }
     return True, "", allocation
@@ -2031,9 +2846,9 @@ def check_config_validity() -> dict:
     If not, ok=False and return the reason for failure.
     """
 
-    cfg = show_config()
+    cfg = copy.deepcopy(show_config())
+    configured_ip, runtime_ip = apply_runtime_host_ip(cfg)
 
-    target_ip = cfg["ENV"]["HOST_IP"]
     visible = cfg["ENV"]["CUDA_VISIBLE_DEVICES"]
     model_path = cfg["ENV"]["MODEL_PATH"]
     model_name = cfg["ENV"]["MODEL_NAME"]
@@ -2071,19 +2886,7 @@ def check_config_validity() -> dict:
         }
 
     # ------------------------------------------------
-    # 2. IP check
-    # ------------------------------------------------
-    host_ip = get_local_ip()
-
-    if target_ip != host_ip:
-        return {
-            "ok": False,
-            "reason": "ip_error",
-            "analysis": f"ENV.HOST_IP 错误: {target_ip} 应改为 {host_ip}",
-        }
-
-    # ------------------------------------------------
-    # 3. GPU List
+    # 2. GPU List
     # ------------------------------------------------
     if not visible:
         return {
@@ -2160,6 +2963,11 @@ def check_config_validity() -> dict:
     total_mib = current_eval["total_mib"]
 
     analysis_lines = []
+    if configured_ip != runtime_ip:
+        analysis_lines.append(
+            f"HOST_IP: 启动实例时自动使用当前 worker IP {runtime_ip} "
+            f"(draft 配置值 {configured_ip or 'empty'} 不会被修改)"
+        )
     analysis_lines.append(f"模型路径: {profile['model_dir']}")
     analysis_lines.append(
         f"模型 {profile['param_billion']:.2f}B ({profile['param_source']})"
@@ -2294,6 +3102,18 @@ def service_instance_recorded_pids(meta: dict) -> list[int]:
     return pids
 
 
+def service_instance_recorded_pid(meta: dict, service: str) -> int:
+    pid_dir = str(meta.get("pid_dir") or "")
+    if not pid_dir:
+        return 0
+    try:
+        with open(os.path.join(pid_dir, f"{service}.pid"), "r", encoding="utf-8") as f:
+            pid = int(f.read().strip())
+        return pid if pid > 0 else 0
+    except (OSError, TypeError, ValueError):
+        return 0
+
+
 def mark_meta_stale_fixed(meta: dict, reason: str, **extra) -> None:
     meta["stale_status_fixed"] = {
         "reason": reason,
@@ -2316,11 +3136,19 @@ def write_meta_if_changed(path: str, meta: dict, changed: bool) -> dict:
 def refresh_service_instance_status(meta: dict) -> dict:
     if not meta:
         return {}
-    ports = meta.get("ports") or {}
     status_file = meta.get("status_file")
     script_pid = int(meta.get("script_pid") or 0)
-    script_running = pid_is_alive(script_pid) or any(
-        pid_is_alive(pid) for pid in service_instance_recorded_pids(meta)
+    start_script_pid = service_instance_recorded_pid(meta, "start-service")
+    vllm_pid = service_instance_recorded_pid(meta, "vllm")
+    port_ownership = service_instance_port_ownership(meta)
+    process_ownership = service_instance_process_ownership(meta, port_ownership)
+    instance_runtime_pids = set(process_ownership["owned"])
+    instance_runtime_pids.update(process_ownership["unverified"])
+    launcher_running = script_pid in instance_runtime_pids or start_script_pid in instance_runtime_pids
+    vllm_running = vllm_pid in instance_runtime_pids
+    auxiliary_running = any(
+        service_instance_recorded_pid(meta, service) in instance_runtime_pids
+        for service in ("inference", "case2chat", "ui", "web")
     )
     old_status = str(meta.get("status") or "")
     script_status = ""
@@ -2336,32 +3164,24 @@ def refresh_service_instance_status(meta: dict) -> dict:
         except Exception:
             pass
 
-    service_ports = [
-        ports.get("vllm"),
-        ports.get("inference"),
-        ports.get("ui"),
-        ports.get("case2chat"),
-    ]
-    running_count = 0
-    for port in service_ports:
-        try:
-            if check_port(int(port)):
-                running_count += 1
-        except (TypeError, ValueError):
-            continue
+    service_port_names = {"vllm", "inference", "ui", "case2chat"}
+    owned_ports = {item["name"] for item in port_ownership["owned"]}
+    unverified_ports = {item["name"] for item in port_ownership["unverified"]}
+    reused_ports = {item["name"] for item in port_ownership["reused"]}
+    running_ports = owned_ports | unverified_ports
 
     new_status = old_status
-    was_active = old_status in {"starting", "running"}
-    if (
-        running_count == len(service_ports)
-        and service_ports
-        and (was_active or script_running)
-    ):
-        new_status = "running"
-    elif script_running or (running_count and was_active):
-        new_status = "starting"
-    elif script_status == "stopped":
+    was_active = old_status in {"starting", "running", "degraded"}
+    all_ports_running = service_port_names.issubset(running_ports)
+    residual_runtime = auxiliary_running or bool(running_ports - {"vllm"})
+    if script_status == "stopped":
         new_status = "stopped"
+    elif vllm_running and all_ports_running:
+        new_status = "running"
+    elif launcher_running or vllm_running:
+        new_status = "starting"
+    elif residual_runtime and was_active:
+        new_status = "degraded"
     elif old_status not in {"stopped", "failed"}:
         if script_status == "finished":
             new_status = "failed"
@@ -2380,6 +3200,9 @@ def refresh_service_instance_status(meta: dict) -> dict:
             old_status=old_status,
             new_status=new_status,
             script_pid=script_pid,
+            vllm_pid=vllm_pid,
+            running_ports=sorted(running_ports),
+            reused_ports=sorted(reused_ports),
         )
     if meta.get("status") == "failed":
         finish_meta_if_missing(meta)
@@ -2387,13 +3210,24 @@ def refresh_service_instance_status(meta: dict) -> dict:
     return meta
 
 
-def start_service() -> str:
+def start_service(
+    gpu_ids: str = "",
+    tensor_parallel_size: int = 0,
+    fallback_to_auto: bool = False,
+) -> str:
     """Start inference service stack."""
     if not current_request_user_id():
         return "当前请求缺少用户身份，已拒绝启动推理服务。"
+    resource_error = managed_resource_error(
+        require_gpus=True, require_reservation=True
+    )
+    if resource_error:
+        return resource_error
     draft_config_path = ensure_user_draft_config()
     CONFIG = show_config()
-    static_check = check_service_start_static_config(CONFIG)
+    runtime_source = copy.deepcopy(CONFIG)
+    configured_ip, runtime_ip = apply_runtime_host_ip(runtime_source)
+    static_check = check_service_start_static_config(runtime_source)
     if not static_check["ok"]:
         return (
             "检查不通过。\n"
@@ -2401,18 +3235,27 @@ def start_service() -> str:
             f"分析：{static_check['analysis']}"
         )
 
-    env = CONFIG["ENV"]
+    if configured_ip != runtime_ip:
+        print(
+            "[service-start] runtime HOST_IP adjusted "
+            f"{configured_ip or 'empty'} -> {runtime_ip}; draft unchanged",
+            flush=True,
+        )
     run_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
     instance_id = run_id
     instance_dir = get_service_instance_dir(instance_id)
     log_root = get_service_run_log_root()
     os.makedirs(instance_dir, exist_ok=True)
-    allocated_ports = allocate_instance_ports(CONFIG)
-    runtime_config = build_instance_runtime_config(CONFIG, allocated_ports)
-    allocation_ok, allocation_error, gpu_allocation = apply_auto_gpu_allocation(
-        runtime_config
+    allocated_ports = allocate_instance_ports(runtime_source, instance_id)
+    runtime_config = build_instance_runtime_config(runtime_source, allocated_ports)
+    allocation_ok, allocation_error, gpu_allocation = apply_requested_gpu_allocation(
+        runtime_config,
+        gpu_ids=gpu_ids,
+        tensor_parallel_size=tensor_parallel_size,
+        fallback_to_auto=fallback_to_auto,
     )
     if not allocation_ok:
+        release_pending_instance_ports(instance_id, allocated_ports)
         return allocation_error
 
     runtime_config_path = os.path.join(instance_dir, "service.runtime.yaml")
@@ -2436,13 +3279,17 @@ def start_service() -> str:
     proc_env["SERVICE_RUN_ID"] = run_id
     proc_env["SERVICE_RUN_LOG_DIR"] = run_log_dir
     proc_env["SERVICE_PID_DIR"] = pid_dir
-    proc = subprocess.Popen(
-        ["bash", env["START_SCRIPT"], "start", runtime_config_path],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=proc_env,
-        start_new_session=True,
-    )
+    try:
+        proc = subprocess.Popen(
+            ["bash", runtime_env["START_SCRIPT"], "start", runtime_config_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=proc_env,
+            start_new_session=True,
+        )
+    except Exception:
+        release_pending_instance_ports(instance_id, allocated_ports)
+        raise
     started_at = time.strftime("%Y-%m-%d %H:%M:%S")
     instance_meta = {
         "instance_id": instance_id,
@@ -2473,38 +3320,59 @@ def start_service() -> str:
         "started_at": started_at,
         "finished_at": None,
     }
+    resource_context = current_request_resource_context()
+    if resource_pool_managed():
+        instance_meta["resource"] = {
+            "mode": "managed",
+            "runtime_node_id": str(resource_context.get("runtime_node_id") or ""),
+            "reservation_id": str(resource_context.get("reservation_id") or ""),
+            "resource_group_id": str(resource_context.get("resource_group_id") or ""),
+            "training_pool_id": str(resource_context.get("training_pool_id") or ""),
+            "expires_at": str(resource_context.get("expires_at") or ""),
+            "assigned_gpus": resource_context_gpu_ids(resource_context),
+            "actual_gpus": parse_visible_gpus(
+                runtime_env.get("CUDA_VISIBLE_DEVICES", "")
+            ),
+        }
     save_service_instance(instance_meta)
-    atomic_write_json(
-        status_file,
-        {
-            "run_id": run_id,
-            "instance_id": instance_id,
-            "status": "starting",
-            "script_pid": proc.pid,
-            "config_profile": "runtime",
-            "config_file": runtime_config_path,
-            "draft_config": draft_config_path,
-            "log_dir": run_log_dir,
-            "pid_dir": pid_dir,
-            "started_at": started_at,
-            "finished_at": None,
-            "ports": {
-                "vllm": allocated_ports["vllm"],
-                "inference": allocated_ports["inference"],
-                "ui": allocated_ports["ui"],
-                "case2chat": allocated_ports["case2chat"],
-                "master": allocated_ports["master"],
-            },
-            "error": None,
-            "gpu_allocation": gpu_allocation,
+    release_pending_instance_ports(instance_id, allocated_ports)
+    status_payload = {
+        "run_id": run_id,
+        "instance_id": instance_id,
+        "status": "starting",
+        "script_pid": proc.pid,
+        "config_profile": "runtime",
+        "config_file": runtime_config_path,
+        "draft_config": draft_config_path,
+        "log_dir": run_log_dir,
+        "pid_dir": pid_dir,
+        "started_at": started_at,
+        "finished_at": None,
+        "ports": {
+            "vllm": allocated_ports["vllm"],
+            "inference": allocated_ports["inference"],
+            "ui": allocated_ports["ui"],
+            "case2chat": allocated_ports["case2chat"],
+            "master": allocated_ports["master"],
         },
-    )
+        "error": None,
+        "gpu_allocation": gpu_allocation,
+    }
+    if resource_pool_managed():
+        status_payload["resource"] = instance_meta["resource"]
+    atomic_write_json(status_file, status_payload)
     atomic_write_json(
         get_service_start_latest_path(),
         {
             "run_id": run_id,
             "status_file": status_file,
         },
+    )
+    allocation_mode = str(gpu_allocation.get("mode") or "auto")
+    allocation_text = (
+        "用户指定本次实例 GPU，不修改全局 service.yaml 或用户 draft"
+        if allocation_mode == "manual"
+        else "自动选择本次实例可用 GPU，不修改全局 service.yaml 或用户 draft"
     )
     return (
         "启动任务已提交，正在后台启动。\n"
@@ -2513,7 +3381,7 @@ def start_service() -> str:
         f"模型: {runtime_env['MODEL_NAME']}\n"
         f"模型路径: {runtime_env['MODEL_PATH']}{runtime_env['MODEL_NAME']}\n"
         f"HOST_IP: {runtime_env['HOST_IP']}\n"
-        "GPU分配: 自动选择本次实例可用 GPU，不修改全局 service.yaml 或用户 draft\n"
+        f"GPU分配: {allocation_text}\n"
         f"GPU: {runtime_env.get('CUDA_VISIBLE_DEVICES', '')}\n"
         f"TP: {runtime_config['RUNTIME'].get('TENSOR_PARALLEL_SIZE')}\n"
         "端口:\n"
@@ -3055,22 +3923,17 @@ def running_instance_tasks_block_text(instance_id: str, tasks: dict) -> str:
 def service_instance_runtime_active(
     meta: dict, tracked_pids: list[int] | None = None
 ) -> bool:
-    """Return whether an instance still owns a live process or service port."""
-    script_pid = int(meta.get("script_pid") or 0)
-    if script_pid and is_process_running(script_pid):
-        return True
-    recorded_pids = service_instance_recorded_pids(meta)
-    if any(pid_is_alive(pid) for pid in [*recorded_pids, *(tracked_pids or [])]):
-        return True
-
-    ports = meta.get("ports") or {}
-    for name in ("vllm", "inference", "ui", "case2chat"):
-        try:
-            if check_port(int(ports.get(name))):
-                return True
-        except (TypeError, ValueError):
-            continue
-    return False
+    """Return whether an instance owns or may own a live process or port."""
+    port_ownership = service_instance_port_ownership(meta)
+    process_ownership = service_instance_process_ownership(
+        meta, port_ownership, tracked_pids=tracked_pids
+    )
+    return bool(
+        process_ownership["owned"]
+        or process_ownership["unverified"]
+        or port_ownership["owned"]
+        or port_ownership["unverified"]
+    )
 
 
 def service_instance_is_active(meta: dict) -> bool:
@@ -3078,40 +3941,12 @@ def service_instance_is_active(meta: dict) -> bool:
     return status in {"starting", "running"} and service_instance_runtime_active(meta)
 
 
-def stop_service_instance(instance_id: str, confirm: bool = False) -> str:
-    meta = visible_service_instance_meta(instance_id)
-    if not meta:
-        return f"推理服务实例不存在: {instance_id}"
-
-    current = current_request_user_id()
-    owner = str(meta.get("owner_user_id") or "").strip()
-    if not current:
-        return (
-            "当前请求缺少用户身份，已拒绝停止推理服务实例。\n"
-            f"instance_id={instance_id}"
-        )
-    if not owner:
-        return (
-            "该推理服务实例没有有效的所有者记录，已拒绝停止。\n"
-            f"instance_id={instance_id}\n"
-            "请通过服务器运维方式处理该历史实例。"
-        )
-    if owner != current:
-        return (
-            "该推理服务实例属于其他用户，已拒绝停止。\n"
-            f"instance_id={instance_id}\n"
-            f"status={meta.get('status', '')}\n"
-            "普通工具只允许停止当前用户自己的实例；如需处理残留实例，请由管理员单独处理。"
-        )
-
-    block_text = running_instance_tasks_block_text(
-        instance_id, running_tasks_for_service_instance(instance_id)
-    )
-    if block_text:
-        return block_text
-
+def stop_service_instance_runtime(meta: dict) -> str:
+    """Stop one instance after the caller has completed authorization checks."""
+    instance_id = str(meta.get("instance_id") or meta.get("run_id") or "").strip()
     runtime_config = str(meta.get("runtime_config") or "")
     if not runtime_config or not os.path.exists(runtime_config):
+        ownership_cleanup = terminate_instance_owned_processes(meta)
         meta = refresh_service_instance_status(meta)
         if service_instance_runtime_active(meta):
             save_service_instance(meta)
@@ -3119,7 +3954,8 @@ def stop_service_instance(instance_id: str, confirm: bool = False) -> str:
                 "推理服务实例停止失败：runtime_config 不存在，但仍检测到存活进程或端口。\n"
                 f"instance_id={instance_id}\n"
                 f"runtime_config={runtime_config}\n"
-                f"status={meta.get('status', '')}"
+                f"status={meta.get('status', '')}\n"
+                f"ownership_cleanup={ownership_cleanup}"
             )
         meta["status"] = "stopped"
         meta["finished_at"] = current_time_text()
@@ -3155,6 +3991,12 @@ def stop_service_instance(instance_id: str, confirm: bool = False) -> str:
         result = f"停止命令执行超时。{result}".strip()
         return_code = -1
 
+    ownership_cleanup = terminate_instance_owned_processes(meta)
+    if ownership_cleanup["matched_pids"]:
+        result = (
+            f"{result}\ninstance_owned_process_cleanup={ownership_cleanup}"
+        ).strip()
+
     meta["stop_result"] = result
     meta["stop_return_code"] = return_code
     for _ in range(10):
@@ -3186,6 +4028,40 @@ def stop_service_instance(instance_id: str, confirm: bool = False) -> str:
     if return_code != 0:
         response += f"\n停止命令返回码={return_code}，但已确认相关 PID 和端口均已释放。"
     return response
+
+
+def stop_service_instance(instance_id: str, confirm: bool = False) -> str:
+    meta = visible_service_instance_meta(instance_id)
+    if not meta:
+        return f"推理服务实例不存在: {instance_id}"
+
+    current = current_request_user_id()
+    owner = str(meta.get("owner_user_id") or "").strip()
+    if not current:
+        return (
+            "当前请求缺少用户身份，已拒绝停止推理服务实例。\n"
+            f"instance_id={instance_id}"
+        )
+    if not owner:
+        return (
+            "该推理服务实例没有有效的所有者记录，已拒绝停止。\n"
+            f"instance_id={instance_id}\n"
+            "请通过服务器运维方式处理该历史实例。"
+        )
+    if owner != current:
+        return (
+            "该推理服务实例属于其他用户，已拒绝停止。\n"
+            f"instance_id={instance_id}\n"
+            f"status={meta.get('status', '')}\n"
+            "普通工具只允许停止当前用户自己的实例；如需处理残留实例，请由管理员单独处理。"
+        )
+
+    block_text = running_instance_tasks_block_text(
+        instance_id, running_tasks_for_service_instance(instance_id)
+    )
+    if block_text:
+        return block_text
+    return stop_service_instance_runtime(meta)
 
 
 def list_service_instance_tasks_text(instance_id: str = "latest") -> str:
@@ -3321,7 +4197,9 @@ def running_benchmark_jobs() -> list[dict]:
     )
 
 
-def refresh_benchmark_job_meta(job_id: str, meta_path: str, meta: dict) -> dict:
+def refresh_benchmark_job_meta(
+    job_id: str, meta_path: str, meta: dict, persist: bool = True
+) -> dict:
     if meta.get("status") != "running":
         return meta
 
@@ -3351,7 +4229,7 @@ def refresh_benchmark_job_meta(job_id: str, meta_path: str, meta: dict) -> dict:
         old_status=old_status,
         new_status=meta.get("status"),
     )
-    return write_meta_if_changed(meta_path, meta, True)
+    return write_meta_if_changed(meta_path, meta, persist)
 
 
 def running_benchmark_jobs_text() -> str:
@@ -3503,9 +4381,9 @@ def format_test_path(path: str) -> str:
     return format_agent_relative_path(resolve_test_runtime_path(path))
 
 
-def refresh_test_run_meta(test_run_id: str, status_file: str, meta: dict) -> dict:
+def _refresh_test_run_meta_value(test_run_id: str, meta: dict) -> tuple[dict, bool]:
     if meta.get("status") != "running":
-        return meta
+        return meta, False
 
     tests = meta.get("tests") or {}
     changed = False
@@ -3550,7 +4428,21 @@ def refresh_test_run_meta(test_run_id: str, status_file: str, meta: dict) -> dic
             old_status=old_status,
             new_status=meta.get("status"),
         )
-    return write_meta_if_changed(status_file, meta, changed)
+    return meta, changed
+
+
+def refresh_test_run_meta(
+    test_run_id: str, status_file: str, meta: dict, persist: bool = True
+) -> dict:
+    if not persist:
+        return _refresh_test_run_meta_value(test_run_id, meta)[0]
+
+    with json_file_lock(status_file):
+        current = load_json_file(status_file, None)
+        if not isinstance(current, dict) or not current:
+            return meta
+        current, changed = _refresh_test_run_meta_value(test_run_id, current)
+        return write_meta_if_changed(status_file, current, changed)
 
 
 def running_tests_text(
@@ -3692,22 +4584,24 @@ def running_tests_text(
 
 def monitor_test_job(test_run_id: str, proc: subprocess.Popen, status_file: str):
     exit_code = proc.wait()
-    with open(status_file, "r") as f:
-        meta = json.load(f)
-    if meta.get("status") != "running":
-        return
-    meta["status"] = "finished" if exit_code == 0 else "failed"
-    meta["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    meta["exit_code"] = exit_code
-    atomic_write_json(status_file, meta)
+
+    def finish(meta):
+        if meta.get("status") != "running":
+            return
+        meta["status"] = "finished" if exit_code == 0 else "failed"
+        meta["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        meta["exit_code"] = exit_code
+
+    update_all_test_status(status_file, finish)
 
 
 def update_all_test_status(status_file: str, update_fn):
-    with open(status_file, "r") as f:
-        meta = json.load(f)
-    update_fn(meta)
-    atomic_write_json(status_file, meta)
-    return meta
+    with json_file_lock(status_file):
+        with open(status_file, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        update_fn(meta)
+        atomic_write_json(status_file, meta)
+        return meta
 
 
 def mark_remaining_tests(tests: dict, status: str):
@@ -3728,14 +4622,15 @@ def run_all_test_job(
 ):
     failed = False
     for script_name in scripts:
-        with open(status_file, "r") as f:
-            meta = json.load(f)
+        def prepare(meta):
+            if meta.get("status") != "running":
+                mark_remaining_tests(meta.get("tests", {}), "stopped")
+                meta["finished_at"] = meta.get("finished_at") or time.strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+
+        meta = update_all_test_status(status_file, prepare)
         if meta.get("status") != "running":
-            mark_remaining_tests(meta.get("tests", {}), "stopped")
-            meta["finished_at"] = meta.get("finished_at") or time.strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
-            atomic_write_json(status_file, meta)
             return
 
         port = (
@@ -3761,50 +4656,52 @@ def run_all_test_job(
             )
 
         def mark_running(meta):
+            if meta.get("status") != "running":
+                return
             item = meta["tests"][script_name]
             item["status"] = "running"
             item["pid"] = proc.pid
             item["port"] = port
             item["started_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
-        update_all_test_status(status_file, mark_running)
+        meta = update_all_test_status(status_file, mark_running)
+        if meta.get("status") != "running":
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            return
         exit_code = proc.wait()
 
-        with open(status_file, "r") as f:
-            meta = json.load(f)
-        if meta.get("status") != "running":
-            if is_process_running(proc.pid):
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
+        def finish_script(meta):
             item = meta["tests"][script_name]
-            item["status"] = "stopped"
+            if meta.get("status") != "running":
+                item["status"] = "stopped"
+                item["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                item["exit_code"] = None
+                mark_remaining_tests(meta.get("tests", {}), "stopped")
+                meta["finished_at"] = meta.get("finished_at") or time.strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+                return
+            item["status"] = "finished" if exit_code == 0 else "failed"
             item["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            item["exit_code"] = None
-            mark_remaining_tests(meta.get("tests", {}), "stopped")
-            meta["finished_at"] = meta.get("finished_at") or time.strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
-            atomic_write_json(status_file, meta)
+            item["exit_code"] = exit_code
+            item["pid"] = proc.pid
+
+        meta = update_all_test_status(status_file, finish_script)
+        if meta.get("status") != "running":
             return
-
-        item = meta["tests"][script_name]
-        item["status"] = "finished" if exit_code == 0 else "failed"
-        item["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        item["exit_code"] = exit_code
-        item["pid"] = proc.pid
         failed = failed or exit_code != 0
-        atomic_write_json(status_file, meta)
 
-    with open(status_file, "r") as f:
-        meta = json.load(f)
-    if meta.get("status") != "running":
-        return
-    meta["status"] = "failed" if failed else "finished"
-    meta["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    meta["exit_code"] = 1 if failed else 0
-    atomic_write_json(status_file, meta)
+    def finish_all(meta):
+        if meta.get("status") != "running":
+            return
+        meta["status"] = "failed" if failed else "finished"
+        meta["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        meta["exit_code"] = 1 if failed else 0
+
+    update_all_test_status(status_file, finish_all)
 
 
 def start_test_job(
@@ -4076,6 +4973,64 @@ def test_run_is_active(meta: dict) -> bool:
     return bool(script_pid and pid_is_alive(script_pid))
 
 
+def stop_test_run_runtime(test_run_id: str, status_file: str, meta: dict) -> str:
+    """Stop one test run after the caller has completed authorization checks."""
+    with json_file_lock(status_file):
+        meta = load_json_file(status_file, {})
+        status = meta.get("status")
+        script_pid = int(meta.get("script_pid") or 0)
+        if status != "running":
+            return (
+                f"测试任务无需停止: status={status}, test_run_id={test_run_id}, "
+                f"log_file={format_test_path(meta.get('log_file'))}"
+            )
+
+        tests = meta.get("tests") or {}
+        stopped_pid = None
+        if tests:
+            for item in tests.values():
+                if item.get("status") == "running" and item.get("pid"):
+                    stopped_pid = int(item["pid"])
+                    try:
+                        os.killpg(os.getpgid(stopped_pid), signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    except Exception as e:
+                        return (
+                            f"停止测试失败: test_run_id={test_run_id}, "
+                            f"pid={stopped_pid}, error={e}"
+                        )
+                    break
+            mark_remaining_tests(tests, "stopped")
+        elif script_pid and is_process_running(script_pid):
+            try:
+                os.killpg(os.getpgid(script_pid), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except Exception as e:
+                return (
+                    f"停止测试失败: test_run_id={test_run_id}, "
+                    f"pid={script_pid}, error={e}"
+                )
+
+        meta["status"] = "stopped"
+        meta["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        meta["exit_code"] = None
+        atomic_write_json(status_file, meta)
+
+    if tests:
+        return (
+            f"测试任务已停止: test_run_id={test_run_id}, pid={stopped_pid}\n"
+            f"log_file={format_test_path(meta.get('log_file'))}"
+        )
+    if not script_pid or not is_process_running(script_pid):
+        return f"测试进程已不存在，状态已标记为 stopped: test_run_id={test_run_id}"
+    return (
+        f"测试任务已停止: test_run_id={test_run_id}, pid={script_pid}\n"
+        f"log_file={format_test_path(meta.get('log_file'))}"
+    )
+
+
 def test_stop_text(
     test_run_id: str = "latest", confirm: bool = False, scope: str = "mine"
 ) -> str:
@@ -4095,7 +5050,6 @@ def test_stop_text(
     meta = refresh_test_run_meta(test_run_id, status_file, meta)
 
     status = meta.get("status")
-    script_pid = int(meta.get("script_pid") or 0)
     owner = task_owner_user_id(meta)
     current = current_request_user_id()
     if not current:
@@ -4113,61 +5067,7 @@ def test_stop_text(
             "普通工具只允许停止当前用户自己的功能测试任务。"
         )
 
-    if status != "running":
-        return (
-            f"测试任务无需停止: status={status}, test_run_id={test_run_id}, "
-            f"log_file={format_test_path(meta.get('log_file'))}"
-        )
-
-    tests = meta.get("tests") or {}
-    if tests:
-        stopped_pid = None
-        for item in tests.values():
-            if item.get("status") == "running" and item.get("pid"):
-                stopped_pid = int(item["pid"])
-                try:
-                    os.killpg(os.getpgid(stopped_pid), signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                except Exception as e:
-                    return (
-                        f"停止测试失败: test_run_id={test_run_id}, "
-                        f"pid={stopped_pid}, error={e}"
-                    )
-                break
-
-        meta["status"] = "stopped"
-        meta["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        meta["exit_code"] = None
-        mark_remaining_tests(tests, "stopped")
-        atomic_write_json(status_file, meta)
-        return (
-            f"测试任务已停止: test_run_id={test_run_id}, pid={stopped_pid}\n"
-            f"log_file={format_test_path(meta.get('log_file'))}"
-        )
-
-    if not script_pid or not is_process_running(script_pid):
-        meta["status"] = "stopped"
-        meta["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        meta["exit_code"] = None
-        atomic_write_json(status_file, meta)
-        return f"测试进程已不存在，状态已标记为 stopped: test_run_id={test_run_id}"
-
-    try:
-        os.killpg(os.getpgid(script_pid), signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    except Exception as e:
-        return f"停止测试失败: test_run_id={test_run_id}, pid={script_pid}, error={e}"
-
-    meta["status"] = "stopped"
-    meta["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    meta["exit_code"] = None
-    atomic_write_json(status_file, meta)
-    return (
-        f"测试任务已停止: test_run_id={test_run_id}, pid={script_pid}\n"
-        f"log_file={format_test_path(meta.get('log_file'))}"
-    )
+    return stop_test_run_runtime(test_run_id, status_file, meta)
 
 
 def start_single_test(test_name: str, instance_id: str = "latest") -> str:
@@ -4237,7 +5137,7 @@ def update_config(key: str, value: str) -> dict:
         except (TypeError, ValueError):
             return f"Invalid float value for {key}: {value}"
     current[parts[-1]] = new_value
-    write_runtime_config(config_path, cfg)
+    write_user_draft_config(config_path, cfg)
 
     user_id = current_request_user_id()
     if user_id:
@@ -4288,7 +5188,7 @@ def restore_default_config() -> str:
     os.makedirs(os.path.dirname(draft_path), exist_ok=True)
     with open(DEFAULT_CONFIG_FILE) as f:
         cfg = yaml.safe_load(f) or {}
-    write_runtime_config(draft_path, cfg)
+    write_user_draft_config(draft_path, cfg)
     atomic_write_json(
         get_user_config_meta_path(user_id),
         {
@@ -4830,6 +5730,38 @@ def list_benchmark_jobs_text(
     return "\n".join(lines)
 
 
+def stop_benchmark_job_runtime(job_id: str, meta_file: str, meta: dict) -> str:
+    """Stop one benchmark after the caller has completed authorization checks."""
+    pid = int(meta.get("pid") or 0)
+    if meta.get("status") != "running":
+        return (
+            f"benchmark任务无需停止: status={meta.get('status')}, job_id={job_id}, "
+            f"pid={pid}, output={format_agent_relative_path(meta.get('output', ''))}"
+        )
+
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+
+        meta["status"] = "stopped"
+        meta["end_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        if "progress" in meta and "files" in meta["progress"]:
+            for file_stat in meta["progress"]["files"].values():
+                if file_stat.get("status") == "running":
+                    file_stat["status"] = "stopped"
+
+        atomic_write_json(meta_file, meta)
+        return f"stopped successfully: job_id={job_id} pid={pid}"
+    except ProcessLookupError:
+        meta = refresh_benchmark_job_meta(job_id, meta_file, meta)
+        return (
+            "benchmark进程已不存在，状态已同步: "
+            f"status={meta.get('status')}, job_id={job_id}, pid={pid}"
+        )
+    except Exception as exc:
+        return f"error: {exc}"
+
+
 def stop_benchmark_job(job_id: str, confirm: bool = False) -> str:
     """Stop a running benchmark job."""
 
@@ -4841,7 +5773,7 @@ def stop_benchmark_job(job_id: str, confirm: bool = False) -> str:
 
     with open(meta_file, "r") as f:
         meta = refresh_benchmark_job_meta(job_id, meta_file, json.load(f))
-    pid = int(meta["pid"])
+    pid = int(meta.get("pid") or 0)
     owner = task_owner_user_id(meta)
     current = current_request_user_id()
     if not current:
@@ -4864,41 +5796,7 @@ def stop_benchmark_job(job_id: str, confirm: bool = False) -> str:
             f"benchmark任务无需停止: status={meta.get('status')}, job_id={job_id}, "
             f"pid={pid}, output={format_agent_relative_path(meta.get('output', ''))}"
         )
-
-    if meta["status"] == "running":
-        try:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
-
-            meta["status"] = "stopped"
-            meta["end_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
-
-            # add, for medbench stop
-            if "progress" in meta and "files" in meta["progress"]:
-                for file_stat in meta["progress"]["files"].values():
-                    if file_stat.get("status") == "running":
-                        file_stat["status"] = "stopped"
-
-            atomic_write_json(meta_file, meta)
-
-            return f"stopped successfully: job_id={job_id} pid={pid}"
-
-        except ProcessLookupError:
-            meta = refresh_benchmark_job_meta(job_id, meta_file, meta)
-            return (
-                f"benchmark进程已不存在，状态已同步: "
-                f"status={meta.get('status')}, job_id={job_id}, pid={pid}"
-            )
-        except Exception as e:
-            return f"error: {str(e)}"
-
-    elif meta["status"] == "finished":
-        return "already finished: no action taken"
-
-    elif meta["status"] == "stopped":
-        return "already stopped: no action taken"
-
-    else:
-        return f"unvalid status: {meta['status']}"
+    return stop_benchmark_job_runtime(job_id, meta_file, meta)
 
 
 def medbench_list():
@@ -5299,10 +6197,20 @@ def update_progress(meta: dict) -> bool:
 
 
 def atomic_write_json(path: str, data: dict):
-    tmp_path = path + ".tmp"
-    with open(tmp_path, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp_path, path)
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 def medbench_progress_text(job_id: str) -> str:
@@ -5923,13 +6831,12 @@ def benchmark_type_from_mode(mode: str) -> str:
     return "medical_choice" if mode == "eval" else mode
 
 
-def benchmark_report_data(job_id: str, text: str, scope: str = "mine") -> dict:
+def benchmark_report_data(job_id: str, scope: str = "mine") -> dict:
     """Build structured benchmark report data from the same files as report text."""
     data = {
         "action": "report",
         "job_id": job_id,
         "current_time": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "text": str(text),
     }
     meta_path = os.path.join(get_benchmark_log_dir(), job_id, "meta.json")
     if not os.path.exists(meta_path):
@@ -5949,7 +6856,9 @@ def benchmark_report_data(job_id: str, text: str, scope: str = "mine") -> dict:
             {
                 "status": "error",
                 "error": f"读取 meta.json 失败: {e}",
-                "meta_path": format_agent_relative_path(meta_path),
+                "artifacts": {
+                    "meta": format_agent_relative_path(meta_path),
+                },
             }
         )
         return data
@@ -5983,9 +6892,11 @@ def benchmark_report_data(job_id: str, text: str, scope: str = "mine") -> dict:
             "return_code": meta.get("return_code"),
             "start_time": meta.get("start_time"),
             "end_time": meta.get("end_time"),
-            "log": format_agent_relative_path(meta.get("log")),
-            "output": format_agent_relative_path(output_file),
-            "meta_path": format_agent_relative_path(meta_path),
+            "artifacts": {
+                "log": format_agent_relative_path(meta.get("log")),
+                "output": format_agent_relative_path(output_file),
+                "meta": format_agent_relative_path(meta_path),
+            },
         }
     )
 
@@ -6022,7 +6933,7 @@ def benchmark_report_data(job_id: str, text: str, scope: str = "mine") -> dict:
         return data
 
     if os.path.isdir(output_file):
-        data["result_dir"] = format_agent_relative_path(output_file)
+        data["artifacts"]["result_dir"] = format_agent_relative_path(output_file)
         return data
 
     try:
@@ -6034,18 +6945,26 @@ def benchmark_report_data(job_id: str, text: str, scope: str = "mine") -> dict:
 
     summary = result.get("summary", {})
     if isinstance(summary, dict):
-        data["summary"] = summary
-        for key in ("total", "processed", "progress", "split", "task_type"):
-            if key in summary:
-                data[key] = summary[key]
-        metrics = summary.get("metrics")
-        if isinstance(metrics, dict):
-            data["metrics"] = metrics
-        else:
-            metric_keys = ["correct", "accuracy", "avg_f1", "invalid", "invalid_rate"]
-            metrics = {key: summary[key] for key in metric_keys if key in summary}
+        normalized_summary = dict(summary)
+        normalized_summary.pop("dataset", None)
+        metrics = normalized_summary.get("metrics")
+        if not isinstance(metrics, dict):
+            normalized_summary.pop("metrics", None)
+            metric_keys = [
+                "correct",
+                "accuracy",
+                "avg_f1",
+                "invalid",
+                "invalid_rate",
+            ]
+            metrics = {
+                key: normalized_summary.pop(key)
+                for key in metric_keys
+                if key in normalized_summary
+            }
             if metrics:
-                data["metrics"] = metrics
+                normalized_summary["metrics"] = metrics
+        data["summary"] = normalized_summary
 
     if meta.get("status") == "running":
         data["note"] = (
@@ -6061,26 +6980,31 @@ def benchmark_report_data(job_id: str, text: str, scope: str = "mine") -> dict:
 def config_show() -> dict:
     """Show current service config"""
     config = show_public_config()
-    return build_local_tool_response(config, {"config": config})
+    return build_local_tool_response(
+        config,
+        {
+            "config_draft": {
+                "operation": "show",
+                "applies_to": "new_instances",
+                "values": config,
+            }
+        },
+    )
 
 
 @tool
 def service_status() -> dict:
     """Check current inference service status.
 
-    In multi-instance mode, this summarizes active service instances first and
-    only shows the current user's service.draft.yaml ports as compatibility information. If the
-    user asks whether a background startup has completed, use
-    service_start_status instead.
+    The structured response contains only the current user's instances:
+    starting/running/degraded instances in full, plus the five most recent
+    failed and stopped instances. If the user asks whether one background
+    startup has completed, use service_start_status instead.
     """
     status = service_status_data()
     return build_local_tool_response(
         status["text"],
-        {
-            "services": status["services"],
-            "template_services": status["template_services"],
-            "instances": status["instances"],
-        },
+        {"service_instances": status["service_instances"]},
     )
 
 
@@ -6116,19 +7040,33 @@ def config_check() -> dict:
 
 
 @tool
-def service_start() -> str:
+def service_start(
+    gpu_ids: str = "",
+    tensor_parallel_size: int = 0,
+    fallback_to_auto: bool = False,
+) -> str:
     """Start a new inference service instance.
 
-    Existing instances do not need to be stopped first. This tool allocates free
-    ports, selects GPUs for the new instance, and writes a per-instance runtime
-    config. Do not call config_update just to change GPUs before this tool.
+    Existing instances do not need to be stopped first. When gpu_ids is empty,
+    this tool selects GPUs automatically. When users explicitly request GPUs,
+    pass the physical indexes through gpu_ids, for example "4,5". The requested
+    GPUs are strictly validated and written only to the new instance runtime
+    config; do not call config_update for a one-time GPU selection.
+
+    Args:
+    - gpu_ids: comma-separated physical GPU indexes, or empty for automatic
+      allocation.
+    - tensor_parallel_size: defaults to the number of specified GPUs. If set,
+      it must equal the number of gpu_ids.
+    - fallback_to_auto: set true only when the user explicitly permits using
+      other GPUs if the requested GPUs are unavailable.
 
     Startup runs asynchronously. Do not immediately call service_status after
     this tool. Use service_start_status or service_instance_status after a short
     wait or when the user asks for startup progress.
     """
 
-    return start_service()
+    return start_service(gpu_ids, tensor_parallel_size, fallback_to_auto)
 
 
 @tool
@@ -6463,7 +7401,7 @@ def config_keys() -> str:
     """
 
     cfg = show_config()
-    keys = flatten_config_keys(cfg)
+    keys = [key for key in flatten_config_keys(cfg) if key != "ENV.HOST_IP"]
     return "\n".join(keys)
 
 
@@ -6477,7 +7415,7 @@ def config_update(key: str, value: str) -> dict | str:
     """
 
     cfg = show_config()
-    valid = flatten_config_keys(cfg)
+    valid = [key for key in flatten_config_keys(cfg) if key != "ENV.HOST_IP"]
 
     if key not in valid:
         # suffix match
@@ -6501,9 +7439,27 @@ def config_update(key: str, value: str) -> dict | str:
     current_value = get_config_value(cfg, key)
     if config_value_equal(current_value, value):
         text = f"配置未变化，无需更新: {ensure_user_draft_config()}: .{key} = {value}"
-        return build_local_tool_response(text, {"config": show_public_config()})
+        return build_local_tool_response(
+            text,
+            {
+                "config_draft": {
+                    "operation": "update",
+                    "applies_to": "new_instances",
+                    "values": show_public_config(),
+                }
+            },
+        )
     text = update_config(key, value)
-    return build_local_tool_response(text, {"config": show_public_config()})
+    return build_local_tool_response(
+        text,
+        {
+            "config_draft": {
+                "operation": "update",
+                "applies_to": "new_instances",
+                "values": show_public_config(),
+            }
+        },
+    )
 
 
 @tool
@@ -6635,7 +7591,12 @@ def benchmark_report(job_id: str, scope: str = "mine") -> str:
 
     text = benchmark_report_text(job_id, scope)
     return build_local_tool_response(
-        text, {"benchmark": benchmark_report_data(job_id, text, scope)}
+        text,
+        {
+            "benchmark_reports": [
+                benchmark_report_data(job_id, scope)
+            ]
+        },
     )
 
 
@@ -6712,10 +7673,17 @@ def node_list(show_disabled: bool = False) -> str:
     if not nodes:
         return f"暂无节点配置: {NODES_CONFIG_FILE}"
 
+    if resource_pool_managed():
+        resource_error = managed_resource_error()
+        if resource_error:
+            return resource_error
+
     lines = ["多节点推理 Agent 配置:"]
     for key, node in nodes.items():
         enabled = is_node_enabled(node)
         if not enabled and not show_disabled:
+            continue
+        if resource_pool_managed() and not node_matches_resource(key, node):
             continue
         lines.append(
             " | ".join(
@@ -6725,6 +7693,7 @@ def node_list(show_disabled: bool = False) -> str:
                     f"enabled={enabled}",
                     f"role={node.get('ROLE', '')}",
                     f"host={node.get('HOST', '')}",
+                    f"resource_node_id={node.get('RESOURCE_NODE_ID', key)}",
                     f"tool_url={node.get('TOOL_URL') or get_node_tool_url(node.get('URL', ''))}",
                 ]
             )
@@ -6958,6 +7927,10 @@ def node_recommend_start_target(target_node: str = "auto") -> str:
     nodes = load_nodes_config()
     if not nodes:
         return f"暂无节点配置: {NODES_CONFIG_FILE}"
+    if resource_pool_managed():
+        resource_error = managed_resource_error(require_gpus=True)
+        if resource_error:
+            return resource_error
 
     target_text = str(target_node or "auto").strip()
     preferred_key = ""
@@ -6977,6 +7950,9 @@ def node_recommend_start_target(target_node: str = "auto") -> str:
             continue
         if not node_is_worker(node_cfg):
             skipped.append(f"{node_key}: not worker")
+            continue
+        if resource_pool_managed() and not node_matches_resource(node_key, node_cfg):
+            skipped.append(f"{node_key}: outside resource boundary")
             continue
         try:
             recommend_response = call_node_tool(node_key, "gpu_recommend_allocation")
@@ -7069,7 +8045,12 @@ def node_recommend_start_target(target_node: str = "auto") -> str:
 
 
 @tool
-def node_service_start(node: str = "") -> str:
+def node_service_start(
+    node: str = "",
+    gpu_ids: str = "",
+    tensor_parallel_size: int = 0,
+    fallback_to_auto: bool = False,
+) -> str:
     """
     Start one remote node's local inference service.
 
@@ -7077,14 +8058,12 @@ def node_service_start(node: str = "") -> str:
     such as node1/main. The remote node will run its own service_start policy
     checks before starting.
 
-    This tool only starts the service with the remote current user's draft config.
-    It does not modify CUDA_VISIBLE_DEVICES, TENSOR_PARALLEL_SIZE, model name,
-    ports, or any other config.
+    This tool starts from the remote current user's draft config. For a one-time
+    GPU selection, pass gpu_ids directly instead of calling node_config_update.
+    The worker writes the selection only to the new instance runtime config.
 
-    If the user requested any config change before startup, such as "use GPU 0",
-    "set TP=1", "switch model", or "change port", call node_config_update for
-    every requested config change first. Only call node_service_start after all
-    required node_config_update calls have succeeded.
+    Use node_config_update first only for persistent settings such as model name,
+    memory utilization, max tokens, or other draft configuration.
 
     If this tool returns blocked/insufficient_memory, call
     node_recommend_start_target with the same node to find another available
@@ -7096,9 +8075,23 @@ def node_service_start(node: str = "") -> str:
 
     Args:
         node: node key/name/host from nodes.yaml.
+        gpu_ids: comma-separated physical GPU indexes, or empty for automatic
+            allocation.
+        tensor_parallel_size: defaults to the number of specified GPUs and must
+            match that count when provided.
+        fallback_to_auto: set true only when the user explicitly permits using
+            other GPUs if the requested GPUs are unavailable.
     """
 
-    response = call_node_tool(node, "service_start")
+    response = call_node_tool(
+        node,
+        "service_start",
+        {
+            "gpu_ids": gpu_ids,
+            "tensor_parallel_size": tensor_parallel_size,
+            "fallback_to_auto": fallback_to_auto,
+        },
+    )
     return append_start_target_hint(format_node_tool_response(node, response), node)
 
 

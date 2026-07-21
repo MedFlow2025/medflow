@@ -2,6 +2,8 @@ NODES:
   main:
     ENABLED: true
     NAME: main
+    # Set this to the runtime_node_id supplied by Studio in managed mode.
+    RESOURCE_NODE_ID: node-a
     HOST: 10.130.35.2
     TOOL_URL: http://10.130.35.2:8899/worker/tool
     ROLE: worker
@@ -9,6 +11,8 @@ NODES:
   node1:
     ENABLED: true
     NAME: node1
+    # Set this to the runtime_node_id supplied by Studio in managed mode.
+    RESOURCE_NODE_ID: node-b
     HOST: 10.130.36.21
     TOOL_URL: http://10.130.36.21:8899/worker/tool
     ROLE: worker

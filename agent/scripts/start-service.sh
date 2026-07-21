@@ -99,6 +99,7 @@ stop_pid_file() {
     local pid_file=$1
     local name=$2
     local expected=$3
+    local expected_run_id=$4
 
     if [ ! -f "${pid_file}" ]; then
         return
@@ -112,6 +113,14 @@ stop_pid_file() {
     fi
 
     if kill -0 "${pid}" >/dev/null 2>&1; then
+        local process_run_id
+        process_run_id=$(tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null \
+            | sed -n 's/^SERVICE_RUN_ID=//p' | head -n 1)
+        if [ -z "${expected_run_id}" ] || [ "${process_run_id}" != "${expected_run_id}" ]; then
+            echo "Skip ${name} pid ${pid}: SERVICE_RUN_ID does not match ${expected_run_id}"
+            rm -f "${pid_file}"
+            return
+        fi
         if [ -n "${expected}" ]; then
             local cmdline
             cmdline=$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null)
@@ -135,6 +144,7 @@ stop_pid_file() {
 
 stop_recorded_pids() {
     local run_log_dir=$1
+    local expected_run_id=$2
     if [ -z "${run_log_dir}" ]; then
         return
     fi
@@ -144,12 +154,12 @@ stop_recorded_pids() {
         return
     fi
 
-    stop_pid_file "${pid_dir}/start-service.pid" "start-service" "start-service.sh"
-    stop_pid_file "${pid_dir}/ui.pid" "web-ui" "npm"
-    stop_pid_file "${pid_dir}/web.pid" "web" "npm"
-    stop_pid_file "${pid_dir}/case2chat.pid" "case2chat" "case2chat"
-    stop_pid_file "${pid_dir}/inference.pid" "inference" "inference.py"
-    stop_pid_file "${pid_dir}/vllm.pid" "vllm" "vllm"
+    stop_pid_file "${pid_dir}/start-service.pid" "start-service" "start-service.sh" "${expected_run_id}"
+    stop_pid_file "${pid_dir}/ui.pid" "web-ui" "npm" "${expected_run_id}"
+    stop_pid_file "${pid_dir}/web.pid" "web" "npm" "${expected_run_id}"
+    stop_pid_file "${pid_dir}/case2chat.pid" "case2chat" "case2chat" "${expected_run_id}"
+    stop_pid_file "${pid_dir}/inference.pid" "inference" "inference.py" "${expected_run_id}"
+    stop_pid_file "${pid_dir}/vllm.pid" "vllm" "vllm" "${expected_run_id}"
 }
 
 if [ ! -f "../../src/key.pem" ] || [ ! -f "../../src/cert.pem" ]; then
@@ -168,6 +178,15 @@ wait_for_port() {
     done
     
     echo "$name is ready!"
+}
+
+ensure_port_free() {
+    local port=$1
+    local name=$2
+    if lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1; then
+        echo "Cannot start ${name}: port ${port} is already listening."
+        exit 1
+    fi
 }
 
 write_start_status() {
@@ -237,8 +256,13 @@ PY
 
 # Start server
 if [ "$ACTION" == "start" ]; then
-    # Clean
-    . ../scripts/clean.sh $VLLM_OPENAI_PORT $INFERENCE_PORT $UI_PORT $DATA_ANNOTATION_PORT
+    # Ports are allocated and leased per instance. Never kill a listener by
+    # port here because a historical instance may reference a reused port.
+    ensure_port_free "${VLLM_OPENAI_PORT}" "vLLM OpenAI API"
+    ensure_port_free "${INFERENCE_PORT}" "Inference Server"
+    ensure_port_free "${UI_PORT}" "Web UI"
+    ensure_port_free "${DATA_ANNOTATION_PORT}" "Case2Chat"
+    ensure_port_free "${MASTER_PORT}" "distributed runtime"
     cd ../../src
     
     RUN_ID=${SERVICE_RUN_ID:-$(date +"%Y%m%d_%H%M%S")_$$}
@@ -388,10 +412,9 @@ EOF
     
     cd -
     elif [ "$ACTION" == "stop" ]; then
-    # Clean
     RUN_LOG_DIR=$(resolve_run_log_dir)
-    stop_recorded_pids "${RUN_LOG_DIR}"
-    . ../scripts/clean.sh $VLLM_OPENAI_PORT $INFERENCE_PORT $UI_PORT $DATA_ANNOTATION_PORT
+    RUN_ID=${SERVICE_RUN_ID:-$(basename "${RUN_LOG_DIR}")}
+    stop_recorded_pids "${RUN_LOG_DIR}" "${RUN_ID}"
     write_stop_status "${RUN_LOG_DIR}"
 else
     echo "Unknown action: $ACTION, only support start or stop."
